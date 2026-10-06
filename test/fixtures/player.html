@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WebView acceptance fixture</title>
+<style>
+  body { margin: 0; font: 16px sans-serif; }
+  .html5-video-player { background: #222; }
+  video { display: block; width: 100%; height: 220px; }
+</style>
+<div class="html5-video-player"><video controls></video></div>
+<p>Local silent media fixture. This is not a YouTube ad.</p>
+<script>
+  // Record eight seconds of real video locally with WebView's native VP8 codec.
+  // This keeps playback tests independent of network access and YouTube accounts.
+  const video = document.querySelector("video");
+  video.playbackRate = 1.5;
+  const canvas = document.createElement("canvas");
+  canvas.width = 160; canvas.height = 90;
+  const context = canvas.getContext("2d");
+  const stream = canvas.captureStream(20);
+  const recorder = new MediaRecorder(stream, {mimeType: "video/webm;codecs=vp8"});
+  const chunks = [];
+  let frame = 0;
+  const draw = setInterval(() => {
+    context.fillStyle = frame++ % 2 ? "#164e63" : "#0c4a6e";
+    context.fillRect(0, 0, 160, 90);
+    context.fillStyle = "white";
+    context.fillText("Local fixture " + frame, 12, 45);
+  }, 50);
+  recorder.ondataavailable = event => chunks.push(event.data);
+  recorder.onstop = () => {
+    clearInterval(draw);
+    stream.getTracks().forEach(track => track.stop());
+    video.src = URL.createObjectURL(new Blob(chunks, {type: "video/webm"}));
+  };
+  recorder.start();
+  setTimeout(() => recorder.stop(), 8000);
+</script>
+</html>

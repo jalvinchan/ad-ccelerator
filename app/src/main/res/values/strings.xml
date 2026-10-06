@@ -1,0 +1,22 @@
+<resources>
+    <string name="app_name">YouTube Ad Accelerator</string>
+    <string name="home">Home</string>
+    <string name="reload">Reload</string>
+    <string name="browser">Browser</string>
+    <string name="open_browser">Open browser</string>
+    <string name="open_current_page">Open current page in browser</string>
+    <string name="external_link_prompt">Open %1$s in your browser?</string>
+    <string name="browser_session_separate">Browser sign-in is separate from this app. Ad acceleration works only inside this app.</string>
+    <string name="browser_sign_in_separate">Signing in through your browser will not sign this app in.</string>
+    <string name="accelerate_ads">Accelerate ads</string>
+    <string name="acceleration_off">Acceleration off</string>
+    <string name="waiting_for_ad">Acceleration on · waiting for an ad</string>
+    <string name="ad_speed">Ad detected · %1$.1f×</string>
+    <string name="ad_speed_unavailable">Ad detected · speed unavailable</string>
+    <string name="status_unavailable">Player status unavailable</string>
+    <string name="assets_unavailable">Unable to load the accelerator. Please reinstall the app.</string>
+    <string name="loading">Loading YouTube…</string>
+    <string name="load_error">YouTube could not load. Check your connection and tap Reload.</string>
+    <string name="http_error">YouTube returned an error. Tap Reload to try again.</string>
+    <string name="no_browser">No browser available for this link</string>
+</resources>

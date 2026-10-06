@@ -1,0 +1,206 @@
+const assert = require("node:assert/strict");
+const { test } = require("node:test");
+const { readFileSync } = require("node:fs");
+const vm = require("node:vm");
+const core = readFileSync(require.resolve("../src/ad-session.js"), "utf8");
+const controller = readFileSync(require.resolve("../src/page-controller.js"), "utf8");
+
+async function page({ stored = true } = {}) {
+  const timers = new Map();
+  const intervals = new Map();
+  const navigation = new Map();
+  const media = new Map();
+  let observe;
+  let nextId = 0;
+  const rect = { width: 640, height: 360 };
+  const player = {
+    isConnected: true, nodeType: 1, ad: false,
+    classList: { contains: name => name === "ad-showing" && player.ad },
+    querySelector: () => video,
+    querySelectorAll: () => buttons,
+  };
+  const video = {
+    isConnected: true, nodeType: 1, parentElement: player,
+    playbackRate: 2, defaultPlaybackRate: 2, currentTime: 0, currentSrc: "content",
+    paused: true, volume: 0.8,
+    getClientRects: () => [rect], getBoundingClientRect: () => rect,
+  };
+  const button = {
+    isConnected: true, nodeType: 1, parentElement: player,
+    tagName: "BUTTON", disabled: false, hidden: false, clicks: 0,
+    getClientRects: () => [rect], getAttribute: () => null,
+    click() { this.clicks++; },
+  };
+  const buttons = [button];
+  const candidates = [player];
+  const sandbox = vm.createContext({
+    performance: { now: () => 313 }, Date,
+    console: { info() {} },
+    getComputedStyle: element => ({ display: element.display ?? "block", visibility: "visible", opacity: "1" }),
+    setTimeout(callback) { timers.set(++nextId, callback); return nextId; },
+    clearTimeout(id) { timers.delete(id); },
+    setInterval(callback) { intervals.set(++nextId, callback); return nextId; },
+    clearInterval(id) { intervals.delete(id); },
+    addEventListener: (event, callback) => navigation.set(event, callback),
+    document: {
+      documentElement: {}, querySelectorAll: () => candidates,
+      addEventListener: (event, callback) => media.set(event, callback),
+    },
+    MutationObserver: class { constructor(callback) { observe = callback; } observe() {} },
+
+  });
+  vm.runInContext(core, sandbox);
+  vm.runInContext(controller, sandbox);
+  sandbox.YouTubeAdAccelerator.setEnabled(stored);
+  await Promise.resolve();
+  return {
+    video, player, button, buttons, candidates, sandbox, timers, intervals,
+    scan() { observe(); const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(callback => callback()); },
+    change(value) { sandbox.YouTubeAdAccelerator.setEnabled(value); },
+    navigation(event) { navigation.get(event)(); },
+    status() { return sandbox.YouTubeAdAccelerator.getStatus(); },
+  };
+}
+
+test("controller leaves normal content alone, accelerates an ad, and restores cached normal speed", async () => {
+  const current = await page();
+  current.video.playbackRate = 3;
+  current.scan();
+  assert.equal(current.intervals.size, 0);
+  current.player.ad = true;
+  current.video.playbackRate = 1; // YouTube resets the shared element for the ad.
+  current.button.hidden = true;
+  current.scan();
+  assert.equal(current.video.playbackRate, 16);
+  assert.equal(current.video.paused, true);
+  assert.equal(current.video.volume, 0.8);
+  assert.equal(current.video.defaultPlaybackRate, 2);
+  assert.equal(current.intervals.size, 1);
+  current.button.hidden = false;
+  current.scan();
+  assert.equal(current.button.clicks, 0);
+  current.player.ad = false;
+  current.scan();
+  assert.equal(current.video.playbackRate, 3);
+  assert.equal(current.intervals.size, 0);
+});
+
+test("Android controls work without Chrome APIs and restore speed on toggle and app pause", async () => {
+  const current = await page();
+  current.player.ad = true;
+  current.scan();
+  assert.equal(current.video.playbackRate, 16);
+  current.change(false);
+  assert.equal(current.video.playbackRate, 2);
+  current.change(true);
+  assert.equal(current.video.playbackRate, 16);
+  current.sandbox.YouTubeAdAccelerator.setSuspended(true);
+  assert.equal(current.video.playbackRate, 2);
+  assert.equal(current.intervals.size, 0);
+  // Page lifecycle events must never override the native app's paused state.
+  current.navigation("pageshow");
+  current.navigation("yt-navigate-finish");
+  current.scan();
+  assert.equal(current.video.playbackRate, 2);
+  current.sandbox.YouTubeAdAccelerator.setSuspended(false);
+  assert.equal(current.video.playbackRate, 16);
+  current.player.ad = false;
+  current.scan();
+  assert.equal(current.video.playbackRate, 2);
+  vm.runInContext(controller, current.sandbox);
+  assert.equal(current.status().events.filter(event => event.event === "ad-start").length, 3);
+});
+
+test("ad acceleration never searches for or clicks Skip or advertiser controls", async () => {
+  const current = await page();
+  current.player.querySelectorAll = () => assert.fail("Ad acceleration must not inspect clickable controls");
+  current.player.ad = true;
+  for (const time of [0, 5, 10, 20]) {
+    current.video.currentTime = time;
+    current.scan();
+  }
+  assert.equal(current.video.playbackRate, 16);
+  assert.equal(current.button.clicks, 0);
+  assert.equal(current.status().events.some(entry => entry.event.startsWith("skip")), false);
+});
+
+test("disabling or navigating immediately restores speed and stops the watchdog", async () => {
+  for (const action of [current => current.change(false), current => current.navigation("yt-navigate-start")]) {
+    const current = await page();
+    current.player.ad = true;
+    current.button.hidden = true;
+    current.scan();
+    action(current);
+    assert.equal(current.video.playbackRate, 2);
+    assert.equal(current.intervals.size, 0);
+    current.scan();
+    assert.equal(current.video.playbackRate, 2);
+    assert.equal(current.status().adActive, false);
+  }
+});
+
+test("removing a player restores its rate and reinjection does not register duplicate controls", async () => {
+  const current = await page();
+  current.player.ad = true;
+  current.scan();
+  current.video.isConnected = false;
+  current.candidates.length = 0;
+  current.scan();
+  assert.equal(current.video.playbackRate, 2);
+  assert.equal(current.intervals.size, 0);
+  vm.runInContext(controller, current.sandbox);
+  assert.equal(current.intervals.size, 0);
+  assert.equal(current.status().events.filter(entry => entry.event === "ad-start").length, 1);
+});
+
+test("saved disable starts without acceleration", async () => {
+  const current = await page({ stored: false });
+  current.player.ad = true;
+  current.scan();
+  assert.equal(current.video.playbackRate, 2);
+  assert.equal(current.intervals.size, 0);
+  assert.equal(current.status().enabled, false);
+});
+
+test("injection during an ad uses the initial speed and retains only 30 diagnostics", async () => {
+  const current = await page({ stored: false });
+  current.player.ad = true;
+  current.video.playbackRate = 1.5;
+  for (let i = 0; i < 15; i++) {
+    current.change(true);
+    assert.equal(current.video.playbackRate, 16);
+    current.change(false);
+    assert.equal(current.video.playbackRate, 1.5);
+  }
+  assert.equal(current.status().events.length, 30);
+});
+
+test("hidden players are left alone and replacing an ad video restores the original", async () => {
+  const current = await page();
+  current.player.ad = true;
+  current.player.display = "none";
+  current.scan();
+  assert.equal(current.video.playbackRate, 2);
+  current.player.display = "block";
+  current.scan();
+  assert.equal(current.video.playbackRate, 16);
+  const replacement = { ...current.video, playbackRate: 1.5 };
+  current.player.querySelector = () => replacement;
+  current.scan();
+  assert.equal(current.video.playbackRate, 2);
+  assert.equal(replacement.playbackRate, 16);
+  current.change(false);
+  assert.equal(replacement.playbackRate, 1.5);
+});
+
+test("reinjection during an ad preserves a single session and watchdog", async () => {
+  const current = await page();
+  current.player.ad = true;
+  current.scan();
+  vm.runInContext(core, current.sandbox);
+  vm.runInContext(controller, current.sandbox);
+  assert.equal(current.intervals.size, 1);
+  assert.equal(current.status().events.filter(event => event.event === "ad-start").length, 1);
+  current.change(false);
+  assert.equal(current.video.playbackRate, 2);
+});
