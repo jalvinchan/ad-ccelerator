@@ -1,9 +1,11 @@
 [versions]
 agp = "9.4.1"
 junit = "4.13.2"
+geckoview = "157.0.20261005135250"
 
 [libraries]
 junit = { group = "junit", name = "junit", version.ref = "junit" }
+geckoview = { group = "org.mozilla.geckoview", name = "geckoview", version.ref = "geckoview" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -1,104 +1,143 @@
 package lab.youtube.accelerator;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.annotation.SuppressLint;
-import android.content.ActivityNotFoundException;
-import android.content.Intent;
 import android.content.pm.ApplicationInfo;
 import android.graphics.Color;
-import android.net.Uri;
-import android.os.Bundle;
 import android.os.Build;
+import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
 import android.view.View;
-import android.view.WindowManager;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
-import android.window.OnBackInvokedDispatcher;
-import android.webkit.CookieManager;
-import android.webkit.WebChromeClient;
-import android.webkit.WebResourceError;
-import android.webkit.WebResourceRequest;
-import android.webkit.WebSettings;
-import android.webkit.WebView;
-import android.webkit.WebViewClient;
+import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
 import android.widget.Switch;
 import android.widget.TextView;
-import android.widget.Toast;
+import android.window.OnBackInvokedDispatcher;
+import org.json.JSONException;
 import org.json.JSONObject;
-import java.io.IOException;
-import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
+import org.mozilla.geckoview.AllowOrDeny;
+import org.mozilla.geckoview.ContentBlocking;
+import org.mozilla.geckoview.GeckoResult;
+import org.mozilla.geckoview.GeckoRuntime;
+import org.mozilla.geckoview.GeckoRuntimeSettings;
+import org.mozilla.geckoview.GeckoSession;
+import org.mozilla.geckoview.GeckoSessionSettings;
+import org.mozilla.geckoview.GeckoView;
+import org.mozilla.geckoview.WebExtension;
+import org.mozilla.geckoview.WebRequestError;
+import java.util.List;
 
+/** Single-session HTTPS browser with one bundled accelerator extension. */
 public final class MainActivity extends Activity {
     private static final String HOME = "https://m.youtube.com/";
+    private static final String EXTENSION_ID = "accelerator@ad-ccelerator.local";
+    // GeckoRuntime may only be created once per process; sessions belong to activities.
+    private static GeckoRuntime runtime;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private WebView web;
+    private GeckoSession session;
+    private GeckoView web;
     private FrameLayout root;
-    private LinearLayout browser;
+    private LinearLayout controls;
     private TextView status;
-    private View fullscreen;
-    private WebChromeClient.CustomViewCallback fullscreenCallback;
-    private int previousSystemUiVisibility;
+    private EditText address;
+    private WebExtension.Port port;
+    private GeckoSession.SessionState sessionState;
+    private String currentUrl = HOME;
     private boolean enabled;
     private boolean paused = true;
+    private boolean canGoBack;
+    private boolean fullscreen;
+    private boolean extensionReady;
     private boolean loadFailed;
-    private String scripts;
-    private AlertDialog externalLinkDialog;
+    private int previousSystemUiVisibility;
+    private int revision;
 
-    private final Runnable updateStatus = new Runnable() {
-        @Override public void run() {
-            if (paused) return;
-            if (UrlPolicy.trusted(web.getUrl()) && !loadFailed) {
-                web.evaluateJavascript("JSON.stringify(window.YouTubeAdAccelerator?.getStatus() ?? null)", value -> {
-                    if (paused || loadFailed || !UrlPolicy.trusted(web.getUrl())) return;
-                    try {
-                        Object decoded = new org.json.JSONTokener(value).nextValue();
-                        if (!(decoded instanceof String) || "null".equals(decoded)) return;
-                        JSONObject state = new JSONObject((String) decoded);
-                        String message = !enabled ? getString(R.string.acceleration_off) :
-                            state.optBoolean("adActive") ?
-                                (state.isNull("rate") ? getString(R.string.ad_speed_unavailable) :
-                                    getString(R.string.ad_speed, state.optDouble("rate"))) :
-                            getString(R.string.waiting_for_ad);
-                        status.setText(message);
-                    } catch (org.json.JSONException ignored) {
-                        status.setText(R.string.status_unavailable);
-                    }
-                });
-            }
-            handler.postDelayed(this, 1000);
-        }
+    private final Runnable suspendSession = () -> {
+        if (paused && session != null && session.isOpen()) session.setActive(false);
     };
 
-    // YouTube requires JS; navigation is restricted and no native JS bridge exists.
-    @SuppressLint("SetJavaScriptEnabled")
     @Override public void onCreate(Bundle savedState) {
         super.onCreate(savedState);
         enabled = getPreferences(MODE_PRIVATE).getBoolean("enabled", true);
-        try {
-            scripts = readAsset("ad-session.js") + "\n" + readAsset("page-controller.js");
-        } catch (IOException error) {
-            TextView failure = new TextView(this);
-            failure.setText(R.string.assets_unavailable);
-            setContentView(failure);
-            return;
-        }
-        root = new FrameLayout(this);
-        browser = new LinearLayout(this);
-        browser.setOrientation(LinearLayout.VERTICAL);
-        root.addView(browser, new FrameLayout.LayoutParams(-1, -1));
-        setContentView(root);
+        buildUi();
         if (Build.VERSION.SDK_INT >= 33) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                 OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
         }
-        // Target Android 15+ edge-to-edge: keep controls clear of system bars.
+        boolean debug = (getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0;
+        if (runtime == null) {
+            GeckoRuntimeSettings settings = new GeckoRuntimeSettings.Builder()
+                .remoteDebuggingEnabled(debug)
+                .consoleOutput(debug)
+                .allowInsecureConnections(GeckoRuntimeSettings.HTTPS_ONLY)
+                .contentBlocking(new ContentBlocking.Settings.Builder()
+                    .cookieBehavior(ContentBlocking.CookieBehavior.ACCEPT_FIRST_PARTY_AND_ISOLATE_OTHERS)
+                    .build())
+                .build();
+            runtime = GeckoRuntime.create(getApplicationContext(), settings);
+        }
+        session = new GeckoSession(new GeckoSessionSettings.Builder()
+            .suspendMediaWhenInactive(true).build());
+        installDelegates();
+        session.open(runtime);
+        web.setSession(session);
+        runtime.getWebExtensionController().ensureBuiltIn(
+            "resource://android/assets/accelerator/", EXTENSION_ID).accept(extension -> {
+                if (isDestroyed()) return;
+                session.getWebExtensionController().setMessageDelegate(extension, new WebExtension.MessageDelegate() {
+                    @Override public void onConnect(WebExtension.Port connection) {
+                        WebExtension.MessageSender sender = connection.sender;
+                        if (isDestroyed() || sender.session != session || !sender.isTopLevel()
+                            || sender.environmentType != WebExtension.MessageSender.ENV_TYPE_CONTENT_SCRIPT
+                            || !EXTENSION_ID.equals(sender.webExtension.id)
+                            || !UrlPolicy.trusted(sender.url) || !"accelerator".equals(connection.name)) {
+                            connection.disconnect();
+                            return;
+                        }
+                        if (port != null) port.disconnect();
+                        port = connection;
+                        connection.setDelegate(new WebExtension.PortDelegate() {
+                            @Override public void onPortMessage(Object message, WebExtension.Port source) {
+                                receiveStatus(message, source);
+                            }
+                            @Override public void onDisconnect(WebExtension.Port source) {
+                                if (port == source) {
+                                    port = null;
+                                    if (!loadFailed && UrlPolicy.trusted(currentUrl)) {
+                                        status.setText(R.string.connecting_accelerator);
+                                    }
+                                }
+                            }
+                        });
+                        applyState();
+                    }
+                }, "accelerator");
+                extensionReady = true;
+                if (savedState != null) {
+                    sessionState = GeckoSession.SessionState.fromString(savedState.getString("browserState"));
+                }
+                if (sessionState != null) session.restoreState(sessionState);
+                else session.loadUri(HOME);
+            }, error -> {
+                if (!isDestroyed()) status.setText(R.string.assets_unavailable);
+            });
+    }
+
+    private void buildUi() {
+        root = new FrameLayout(this);
+        LinearLayout browser = new LinearLayout(this);
+        browser.setOrientation(LinearLayout.VERTICAL);
+        root.addView(browser, new FrameLayout.LayoutParams(-1, -1));
+        setContentView(root);
         root.setOnApplyWindowInsetsListener((view, insets) -> {
             if (Build.VERSION.SDK_INT >= 30) {
                 android.graphics.Insets bars = insets.getInsets(
@@ -110,27 +149,42 @@ public final class MainActivity extends Activity {
             }
             return insets;
         });
+        controls = new LinearLayout(this);
+        controls.setOrientation(LinearLayout.VERTICAL);
+        browser.addView(controls);
         LinearLayout toolbar = new LinearLayout(this);
         toolbar.setPadding(dp(8), 0, dp(8), 0);
         Button home = new Button(this);
         home.setText(R.string.home);
-        home.setOnClickListener(view -> web.loadUrl(HOME));
+        home.setOnClickListener(view -> navigate(HOME));
         toolbar.addView(home, new LinearLayout.LayoutParams(0, -2, 1));
         Button reload = new Button(this);
         reload.setText(R.string.reload);
-        reload.setOnClickListener(view -> web.reload());
-        toolbar.addView(reload, new LinearLayout.LayoutParams(0, -2, 1));
-        Button openBrowser = new Button(this);
-        openBrowser.setText(R.string.browser);
-        openBrowser.setContentDescription(getString(R.string.open_current_page));
-        openBrowser.setOnClickListener(view -> {
-            String url = UrlPolicy.trusted(web.getUrl()) ? web.getUrl() : HOME;
-            if (openInBrowser(Uri.parse(url))) {
-                Toast.makeText(this, R.string.browser_session_separate, Toast.LENGTH_LONG).show();
-            }
+        reload.setOnClickListener(view -> {
+            if (!extensionReady) return;
+            if (loadFailed) navigate(UrlPolicy.browsableHttps(currentUrl) ? currentUrl : HOME);
+            else session.reload();
         });
-        toolbar.addView(openBrowser, new LinearLayout.LayoutParams(0, -2, 1));
-        browser.addView(toolbar);
+        toolbar.addView(reload, new LinearLayout.LayoutParams(0, -2, 1));
+        controls.addView(toolbar);
+        address = new EditText(this);
+        address.setSingleLine(true);
+        address.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        address.setImeOptions(EditorInfo.IME_ACTION_GO);
+        address.setMinHeight(dp(48));
+        address.setContentDescription(getString(R.string.page_address));
+        address.setText(HOME);
+        address.setOnEditorActionListener((view, action, event) -> {
+            if (action != EditorInfo.IME_ACTION_GO) return false;
+            String url = address.getText().toString().trim();
+            if (!url.contains(":")) url = "https://" + url;
+            navigate(url);
+            address.clearFocus();
+            ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
+                .hideSoftInputFromWindow(address.getWindowToken(), 0);
+            return true;
+        });
+        controls.addView(address, new LinearLayout.LayoutParams(-1, -2));
         Switch accelerate = new Switch(this);
         accelerate.setText(R.string.accelerate_ads);
         accelerate.setPadding(dp(16), 0, dp(16), 0);
@@ -140,209 +194,188 @@ public final class MainActivity extends Activity {
             enabled = checked;
             getPreferences(MODE_PRIVATE).edit().putBoolean("enabled", checked).apply();
             applyState();
-            status.setText(checked ? R.string.waiting_for_ad : R.string.acceleration_off);
+            showIdleStatus();
         });
-        browser.addView(accelerate, new LinearLayout.LayoutParams(-1, -2));
+        controls.addView(accelerate, new LinearLayout.LayoutParams(-1, -2));
         status = new TextView(this);
         status.setPadding(dp(16), dp(4), dp(16), dp(8));
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        browser.addView(status);
-        web = new WebView(this);
-        if ((getApplicationInfo().flags & ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
-            WebView.setWebContentsDebuggingEnabled(true);
-        }
+        status.setText(R.string.starting_browser);
+        controls.addView(status);
+        web = new GeckoView(this);
         browser.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
-        WebSettings settings = web.getSettings();
-        settings.setJavaScriptEnabled(true);
-        settings.setDomStorageEnabled(true);
-        settings.setAllowFileAccess(false);
-        settings.setAllowContentAccess(false);
-        settings.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW);
-        settings.setMediaPlaybackRequiresUserGesture(true);
-        CookieManager.getInstance().setAcceptCookie(true);
-        CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
-        web.setWebViewClient(new WebViewClient() {
-            @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                if (!request.isForMainFrame()) return false;
-                Uri uri = request.getUrl();
-                if (UrlPolicy.trusted(uri.toString())) return false;
-                // External links leave this WebView. Never launch arbitrary intent:// URLs.
-                if (UrlPolicy.externalHttps(uri.toString())) {
-                    if (request.hasGesture()) openInBrowser(uri);
-                    else if (UrlPolicy.trusted(view.getUrl())) offerExternalLink(uri);
+        browser.setFocusableInTouchMode(true);
+        browser.requestFocus();
+    }
+
+    private void installDelegates() {
+        session.setNavigationDelegate(new GeckoSession.NavigationDelegate() {
+            @Override public GeckoResult<AllowOrDeny> onLoadRequest(GeckoSession source, LoadRequest request) {
+                if (!UrlPolicy.browsableHttps(request.uri)) return GeckoResult.fromValue(AllowOrDeny.DENY);
+                // This app has one tab. Keep popup links in the same browser profile.
+                if (request.target == TARGET_WINDOW_NEW) {
+                    handler.post(() -> navigate(request.uri));
+                    return GeckoResult.fromValue(AllowOrDeny.DENY);
                 }
-                return true;
+                return GeckoResult.fromValue(AllowOrDeny.ALLOW);
             }
-            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap icon) {
+            @Override public void onLocationChange(GeckoSession source, String url,
+                    List<GeckoSession.PermissionDelegate.ContentPermission> permissions, Boolean gesture) {
+                if (url == null) return;
+                currentUrl = url;
+                address.setText(url);
+                showIdleStatus();
+            }
+            @Override public void onCanGoBack(GeckoSession source, boolean available) { canGoBack = available; }
+            @Override public GeckoResult<String> onLoadError(GeckoSession source, String uri, WebRequestError error) {
+                loadFailed = true;
+                status.setText(R.string.load_error);
+                return null; // Retain Gecko's normal error page and certificate protections.
+            }
+        });
+        session.setProgressDelegate(new GeckoSession.ProgressDelegate() {
+            @Override public void onPageStart(GeckoSession source, String url) {
                 loadFailed = false;
+                if (port != null) { port.disconnect(); port = null; }
                 status.setText(R.string.loading);
             }
-            @Override public void onPageFinished(WebView view, String url) {
-                if (!UrlPolicy.trusted(url) || !url.equals(view.getUrl()) || loadFailed) return;
-                view.evaluateJavascript(onYouTube(scripts), ignored -> applyState());
-                status.setText(enabled ? R.string.waiting_for_ad : R.string.acceleration_off);
+            @Override public void onPageStop(GeckoSession source, boolean success) {
+                loadFailed = !success;
+                if (success) showIdleStatus();
+                else status.setText(R.string.load_error);
             }
-            @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) {
-                    loadFailed = true;
-                    status.setText(R.string.load_error);
-                }
-            }
-            @Override public void onReceivedHttpError(WebView view, WebResourceRequest request,
-                    android.webkit.WebResourceResponse response) {
-                if (request.isForMainFrame()) {
-                    loadFailed = true;
-                    status.setText(R.string.http_error);
-                }
+            @Override public void onSessionStateChange(GeckoSession source, GeckoSession.SessionState state) {
+                sessionState = state;
             }
         });
-        web.setWebChromeClient(new WebChromeClient() {
-            @Override public void onShowCustomView(View view, CustomViewCallback callback) {
-                if (fullscreen != null) { callback.onCustomViewHidden(); return; }
-                fullscreen = view;
-                fullscreenCallback = callback;
-                browser.setVisibility(View.GONE);
-                root.setBackgroundColor(Color.BLACK);
-                root.addView(view, new FrameLayout.LayoutParams(-1, -1));
-                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-                if (Build.VERSION.SDK_INT >= 30) {
-                    WindowInsetsController bars = getWindow().getInsetsController();
-                    if (bars != null) {
-                        bars.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
-                        bars.hide(WindowInsets.Type.systemBars());
-                    }
-                } else {
-                    previousSystemUiVisibility = getWindow().getDecorView().getSystemUiVisibility();
-                    getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN |
-                        View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
-                }
+        session.setContentDelegate(new GeckoSession.ContentDelegate() {
+            @Override public void onFullScreen(GeckoSession source, boolean active) { showFullscreen(active); }
+            @Override public void onCrash(GeckoSession source) {
+                recoverSession(source);
             }
-            @Override public void onHideCustomView() { exitFullscreen(); }
+            @Override public void onKill(GeckoSession source) { recoverSession(source); }
         });
-        if (savedState == null || web.restoreState(savedState) == null) web.loadUrl(HOME);
-    }
-
-    private String readAsset(String name) throws IOException {
-        try (InputStream stream = getAssets().open(name)) {
-            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
-            byte[] buffer = new byte[4096];
-            int count;
-            while ((count = stream.read(buffer)) != -1) bytes.write(buffer, 0, count);
-            return new String(bytes.toByteArray(), StandardCharsets.UTF_8);
-        }
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
-    }
-
-    private boolean openInBrowser(Uri uri) {
-        if (!UrlPolicy.externalHttps(uri.toString())) return false;
-        // Resolve a browser rather than a YouTube deep-link handler. The selected
-        // browser receives ACTION_VIEW with the actual link, including auth redirects.
-        Intent intent = Intent.makeMainSelectorActivity(Intent.ACTION_MAIN, Intent.CATEGORY_APP_BROWSER);
-        intent.setAction(Intent.ACTION_VIEW);
-        intent.addCategory(Intent.CATEGORY_BROWSABLE);
-        intent.setData(uri);
-        try {
-            startActivity(intent);
-            if ("accounts.google.com".equals(uri.getHost())) {
-                Toast.makeText(this, R.string.browser_sign_in_separate, Toast.LENGTH_LONG).show();
+        session.setPermissionDelegate(new GeckoSession.PermissionDelegate() {
+            @Override public GeckoResult<Integer> onContentPermissionRequest(
+                    GeckoSession source, ContentPermission permission) {
+                return GeckoResult.fromValue(ContentPermission.VALUE_DENY);
             }
-            return true;
-        }
-        catch (ActivityNotFoundException error) {
-            Toast.makeText(this, R.string.no_browser, Toast.LENGTH_SHORT).show();
-            return false;
-        }
+        }); // Camera/microphone/Android permissions also reject by default.
     }
 
-    private void offerExternalLink(Uri uri) {
-        if (paused || isFinishing() || isDestroyed() || externalLinkDialog != null) return;
-        // WebView can lose the gesture on a JavaScript navigation or redirect.
-        // Require an explicit native tap instead of launching a browser automatically.
-        externalLinkDialog = new AlertDialog.Builder(this)
-            .setMessage(getString(R.string.external_link_prompt, uri.getHost()))
-            .setPositiveButton(R.string.open_browser, (dialog, which) -> openInBrowser(uri))
-            .setNegativeButton(android.R.string.cancel, null)
-            .create();
-        externalLinkDialog.setOnDismissListener(dialog -> externalLinkDialog = null);
-        externalLinkDialog.show();
+    private void recoverSession(GeckoSession source) {
+        port = null;
+        loadFailed = true;
+        showFullscreen(false);
+        status.setText(R.string.browser_crashed);
+        source.open(runtime);
+        source.setActive(!paused);
+        // Reload loads currentUrl explicitly because a reopened session has no history.
+    }
+
+    private void navigate(String url) {
+        if (!UrlPolicy.browsableHttps(url)) {
+            status.setText(R.string.https_required);
+            address.setText(currentUrl);
+        } else if (extensionReady) session.loadUri(url);
     }
 
     private void applyState() {
-        if (web == null || !UrlPolicy.trusted(web.getUrl())) return;
-        web.evaluateJavascript(onYouTube("window.YouTubeAdAccelerator?.setSuspended(" + paused + ");" +
-            "window.YouTubeAdAccelerator?.setEnabled(" + enabled + ");"), null);
+        if (port == null) return;
+        try {
+            port.postMessage(new JSONObject().put("type", "state").put("enabled", enabled)
+                .put("paused", paused).put("revision", ++revision));
+        } catch (JSONException error) {
+            throw new IllegalStateException(error);
+        }
     }
 
-    private static String onYouTube(String code) {
-        return "if (location.origin === 'https://m.youtube.com' || " +
-            "location.origin === 'https://www.youtube.com') {\n" + code + "\n}";
+    private void receiveStatus(Object message, WebExtension.Port source) {
+        if (source != port || !(message instanceof JSONObject) || isDestroyed()) return;
+        JSONObject state = (JSONObject) message;
+        if (!"status".equals(state.optString("type")) || state.optInt("revision", -1) != revision) return;
+        if (paused) {
+            if (state.optBoolean("paused")) {
+                handler.removeCallbacks(suspendSession);
+                suspendSession.run();
+            }
+            return;
+        }
+        if (!UrlPolicy.trusted(currentUrl) || loadFailed) return;
+        if (!enabled) status.setText(R.string.acceleration_off);
+        else if (!state.optBoolean("adActive")) status.setText(R.string.waiting_for_ad);
+        else if (state.isNull("rate")) status.setText(R.string.ad_speed_unavailable);
+        else status.setText(getString(R.string.ad_speed, state.optDouble("rate")));
     }
 
-    private void exitFullscreen() {
-        if (fullscreen == null) return;
-        root.removeView(fullscreen);
-        fullscreen = null;
-        browser.setVisibility(View.VISIBLE);
-        root.setBackgroundColor(Color.TRANSPARENT);
-        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+    private void showIdleStatus() {
+        if (loadFailed) return;
+        status.setText(!UrlPolicy.trusted(currentUrl) ? R.string.acceleration_youtube_only :
+            !enabled ? R.string.acceleration_off :
+            port == null ? R.string.connecting_accelerator : R.string.waiting_for_ad);
+    }
+
+    private void showFullscreen(boolean active) {
+        if (fullscreen == active) return;
+        fullscreen = active;
+        controls.setVisibility(active ? View.GONE : View.VISIBLE);
+        root.setBackgroundColor(active ? Color.BLACK : Color.TRANSPARENT);
+        if (active) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if (Build.VERSION.SDK_INT >= 30) {
             WindowInsetsController bars = getWindow().getInsetsController();
-            if (bars != null) bars.show(WindowInsets.Type.systemBars());
-        } else {
-            getWindow().getDecorView().setSystemUiVisibility(previousSystemUiVisibility);
-        }
-        WebChromeClient.CustomViewCallback callback = fullscreenCallback;
-        fullscreenCallback = null;
-        callback.onCustomViewHidden();
+            if (bars != null) {
+                if (active) {
+                    bars.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                    bars.hide(WindowInsets.Type.systemBars());
+                } else bars.show(WindowInsets.Type.systemBars());
+            }
+        } else if (active) {
+            previousSystemUiVisibility = getWindow().getDecorView().getSystemUiVisibility();
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_FULLSCREEN |
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY);
+        } else getWindow().getDecorView().setSystemUiVisibility(previousSystemUiVisibility);
     }
 
     @Override protected void onResume() {
         super.onResume();
         paused = false;
-        if (web != null) { web.onResume(); applyState(); handler.post(updateStatus); }
+        handler.removeCallbacks(suspendSession);
+        if (session != null) { session.setActive(true); applyState(); }
     }
 
     @Override protected void onPause() {
         paused = true;
-        handler.removeCallbacks(updateStatus);
-        if (web != null) {
-            applyState();
-            // Let restoration and pausing run before suspending WebView's execution.
-            web.evaluateJavascript("document.querySelectorAll('video').forEach(video => video.pause())", ignored -> {
-                if (paused && !isDestroyed()) web.onPause();
-            });
-        }
+        applyState();
+        // Restore speed and pause media before suspension; bound the wait if content hangs.
+        if (port == null) suspendSession.run();
+        else handler.postDelayed(suspendSession, 250);
         super.onPause();
     }
 
     @Override protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
-        if (web != null) web.saveState(state);
+        if (sessionState != null) state.putString("browserState", sessionState.toString());
     }
 
-    // Legacy Android 8–12 fallback. Android 13+ uses the registered native callback.
+    // Android 8–12 fallback; Android 13+ uses the native callback registered above.
     @SuppressLint("GestureBackNavigation")
-    @Override public void onBackPressed() {
-        handleBack();
-    }
+    @SuppressWarnings("deprecation")
+    @Override public void onBackPressed() { handleBack(); }
 
     private void handleBack() {
-        if (fullscreen != null) exitFullscreen();
-        else if (web != null && web.canGoBack()) web.goBack();
+        if (fullscreen) session.exitFullScreen();
+        else if (canGoBack) session.goBack();
         else finish();
     }
 
     @Override protected void onDestroy() {
-        handler.removeCallbacks(updateStatus);
-        if (externalLinkDialog != null) externalLinkDialog.dismiss();
-        if (web != null) {
-            exitFullscreen();
-            browser.removeView(web);
-            web.destroy();
-        }
+        handler.removeCallbacksAndMessages(null);
+        if (port != null) { port.disconnect(); port = null; }
+        if (web != null) web.releaseSession();
+        if (session != null) session.close();
         super.onDestroy();
     }
+
+    private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
 }

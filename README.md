@@ -1,89 +1,87 @@
 # YouTube Ad Accelerator for Android
 
-**Prototype: real YouTube playback and ad acceleration are not yet verified.**
-The tested YouTube session stops at a bot-verification prompt. Opening a video
-in an external browser cannot run this app's accelerator and does not meet the
-core goal. See [docs/VERIFICATION.md](docs/VERIFICATION.md) for the evidence.
+A single-tab Android browser powered by Mozilla GeckoView, with a bundled
+WebExtension that temporarily accelerates detected YouTube ads. Playback and
+acceleration run inside the same app and browser profile. Firefox does not need
+to be installed. This replaces the Android WebView prototype in commit `a117335`.
 
-A standalone Android WebView app for YouTube’s mobile site. It temporarily tries
-16×, 8×, then 4× playback during detected ads and restores the content’s observed
-speed afterward. It includes Home, Reload, Browser, a saved acceleration toggle, player
-status, fullscreen video, and Back navigation. Backgrounding restores speed and
-pauses videos; returning does not explicitly resume playback.
+**Experimental: real YouTube ad acceleration is not yet established.** The
+unsigned-in emulator session still encounters YouTube's bot-verification prompt.
+The Google sign-in form opens inside this browser, but completing sign-in and
+playing YouTube videos afterward have not been tested. Changing engines does not
+guarantee that YouTube will allow playback. See [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
-Requires Android 8.0 (API 26) or newer. No root, Accessibility service, ad blocking,
-automatic Skip clicks, downloads, background playback, or account support.
-Live YouTube compatibility must be established separately from unit tests.
+The native controls provide Home, Reload, an HTTPS address field, a saved
+acceleration switch, status, fullscreen, and Back navigation. HTTPS links remain
+in the app, including Google sign-in and help pages. New-window links open in the
+same tab. The extension runs only on exact HTTPS `m.youtube.com` and
+`www.youtube.com` origins; other websites never receive the accelerator.
 
-## Build and test
+The shared controller tries 16×, 8×, then 4× during detected ads and restores the
+observed content speed afterward. It changes only playbackRate: no seeking,
+muting, Skip clicks, ad blocking, downloads, or official YouTube app automation.
+Backgrounding restores speed and pauses video; returning does not call play().
 
-Open this folder in Android Studio. Use the bundled JDK 25, Android SDK platform
-37, and the checked-in Gradle 9.6.0 wrapper (Android Gradle plugin 9.4.1).
-Set your local SDK location in `local.properties`; do not commit that file.
+## Build and install
+
+Requires Android 8.0 (API 26) or newer on ARM64, ARMv7, or x86_64. GeckoView's
+current stable package does not include a 32-bit x86 engine. Build with Android
+Studio's bundled JDK 25, Android compile SDK 37.1, Gradle 9.6.0, and AGP 9.4.1.
+Keep your local SDK path in uncommitted `local.properties`.
 
 ```sh
 node --test test/*.test.cjs
 ./gradlew assembleDebug lintDebug testDebugUnitTest
 ```
 
-Node 18+ is sufficient; JavaScript tests have no npm dependencies. The Android
-runtime uses platform Java/widgets/WebView and adds no app runtime dependencies.
-Gradle generates assets from `src/ad-session.js` and `src/page-controller.js`;
-edit those sources, not the generated copies. No Chrome adapter is packaged.
+The engine version is pinned in `gradle/libs.versions.toml`. The first build needs
+network access to Mozilla's Maven repository and the transitive dependencies.
+Gradle packages `src/manifest.json`, `src/gecko-host.js`, and the two shared
+controller scripts under `assets/accelerator/`. Edit those source files, not the
+generated assets. When changing a bundled extension, increase its manifest
+version: GeckoView persists it and `ensureBuiltIn` replaces it only when the
+version changes.
 
-The debug APK is `app/build/outputs/apk/debug/app-debug.apk`:
-
-```sh
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell am start -n lab.youtube.accelerator/.MainActivity
-```
-
-Debug signing is for local testing. Release signing and distribution are future
-work. Read [PRIVACY.md](PRIVACY.md) before sharing the app and
-[docs/VERIFICATION.md](docs/VERIFICATION.md) for what has actually been verified.
-The source handover is retained in [docs/ANDROID_APP_HANDOVER.md](docs/ANDROID_APP_HANDOVER.md).
-
-## Automated WebView acceptance
-
-For a running debug build on a test emulator/device, forward its debug WebView
-socket, then run the controlled media check (Node 22+). Replace `<app-pid>` with
-`adb shell pidof lab.youtube.accelerator`:
+APKs are generated separately for each CPU architecture under
+`app/build/outputs/apk/debug/`. For the Samsung phone and ARM64 emulator:
 
 ```sh
-adb forward tcp:9222 localabstract:webview_devtools_remote_<app-pid>
-node scripts/verify-webview.mjs
-# Focus only on native external-link and browser actions:
-node scripts/verify-webview.mjs --links-only
+adb -s <device-id> install -r app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+adb -s <device-id> shell am start -n lab.youtube.accelerator/.MainActivity
 ```
 
-`ADB=/absolute/path/to/adb` can select the SDK executable if it is not on PATH.
-Set `ANDROID_SERIAL` to the test device ID when more than one device is connected.
-The harness intercepts one test URL in the local inspector and serves a fixture;
-it does not add any fixture or test bypass to the APK. It records video locally,
-checks real media-time advancement, uses the native switch and Android Home/Back,
-and returns to YouTube afterward. Use a test device: it changes the saved toggle
-and temporarily backgrounds the app. This establishes WebView/controller behavior,
-not YouTube ad compatibility.
+The ARM64 debug APK is approximately 188 MiB because it includes the browser
+engine. APK updates retain the acceleration preference. GeckoView creates its
+own browser profile; old WebView and external-browser cookies are not imported.
+Release signing and distribution remain future work.
 
-## Device acceptance
+## Browser acceptance
 
-Use a non-Premium YouTube session, start a video by tapping its player, and watch
-for an actual ad. Confirm `.html5-video-player.ad-showing` corresponds to that ad
-and that media time advances faster than wall-clock time. Compare real ad duration
-with acceleration disabled. A successful playback-rate assignment alone is not
-proof of a shorter ad.
+With the debug app running in a test emulator/device (Node 22+):
 
-Choose a content speed, then check restoration after ad completion, disabling,
-Home/Reload/navigation, player replacement, app pause, and fullscreen/Back.
-Check rotation and recreation, narrow screens, errors, and external links.
-In debug builds Android Studio or Chrome remote inspection can read
-`window.YouTubeAdAccelerator.getStatus()` (including the latest 30 diagnostics).
-If YouTube shows “Sign in to confirm you’re not a bot”, it is withholding
-playback from this WebView session. The app cannot remove that requirement.
-Use the native Browser button to open the current page in a browser. Browser
-sign-in cookies are separate from the app; playback there has no app acceleration.
-Sign in and Learn more links also leave the app. External redirects without a
-WebView gesture offer an explicit Open browser confirmation rather than silently
-being discarded. Native and JavaScript guards restrict injection to HTTPS `m.youtube.com` and
-`www.youtube.com`. If YouTube changes its markup, change the controller only after
-inspecting the mobile page and add a focused regression test.
+```sh
+adb -s <device-id> forward tcp:6000 localabstract:lab.youtube.accelerator/firefox-debugger-socket
+ANDROID_SERIAL=<device-id> node scripts/verify-gecko.mjs
+```
+
+Set `ADB=/absolute/path/to/adb` if it is not on PATH. The harness uses Firefox's
+local debugging protocol to place a controlled media fixture in an existing
+YouTube-origin document. It never injects the accelerator: the APK's installed
+extension must detect the fixture and change the actual video speed. It checks
+media-time advancement, native controls, pause/restoration, fullscreen/Back, and
+same-session HTTPS navigation. It returns to YouTube afterward. Use a test device;
+it changes the saved toggle and temporarily backgrounds the app. The fixture and
+test harness are not packaged in the APK.
+Emulator recording and accessibility automation have repeatability limits;
+see the verification notes before interpreting a harness failure or success.
+
+For live acceptance, use a non-Premium session that permits playback and observe
+an actual ad. Verify the mobile ad signal, measured media time and shorter ad
+wall-clock duration, then speed restoration. A successful rate assignment or
+controlled fixture does not establish real YouTube ad acceleration.
+
+Read [PRIVACY.md](PRIVACY.md) before sharing the APK,
+[docs/BROWSER_ARCHITECTURE.md](docs/BROWSER_ARCHITECTURE.md) for integration details,
+and [docs/ANDROID_APP_HANDOVER.md](docs/ANDROID_APP_HANDOVER.md) for the original
+handover. Historical WebView results are retained separately in
+[docs/WEBVIEW_VERIFICATION.md](docs/WEBVIEW_VERIFICATION.md).

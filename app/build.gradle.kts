@@ -8,16 +8,26 @@ plugins {
 android {
     namespace = "lab.youtube.accelerator"
     compileSdk = 37
+    compileSdkMinor = 1
     defaultConfig {
         applicationId = "lab.youtube.accelerator"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 3
+        versionName = "0.2.1"
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    // Ship only the engine for the device's CPU, rather than all three in one APK.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a", "x86_64")
+            isUniversalApk = false
+        }
     }
 }
 
@@ -33,12 +43,13 @@ abstract class AcceleratorAssets : DefaultTask() {
 
     @TaskAction
     fun generate() {
-        fileSystem.sync { from(scripts); into(outputDirectory) }
+        fileSystem.sync { from(scripts); into(outputDirectory.dir("accelerator")) }
     }
 }
 
 val acceleratorAssets = tasks.register<AcceleratorAssets>("acceleratorAssets") {
-    scripts.from(rootProject.file("src/ad-session.js"), rootProject.file("src/page-controller.js"))
+    scripts.from(rootProject.file("src/ad-session.js"), rootProject.file("src/page-controller.js"),
+        rootProject.file("src/gecko-host.js"), rootProject.file("src/manifest.json"))
     outputDirectory.set(layout.buildDirectory.dir("generated/acceleratorAssets"))
 }
 androidComponents.onVariants { variant ->
@@ -46,5 +57,6 @@ androidComponents.onVariants { variant ->
 }
 
 dependencies {
+    implementation(libs.geckoview)
     testImplementation(libs.junit)
 }

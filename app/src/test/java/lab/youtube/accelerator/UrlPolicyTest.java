@@ -19,13 +19,13 @@ public class UrlPolicyTest {
         }) assertFalse(url, UrlPolicy.trusted(url));
     }
 
-    @Test public void externalNavigationAlsoRejectsCredentialsAndMalformedUrls() {
-        assertTrue(UrlPolicy.externalHttps("https://example.com/path?q=youtube"));
-        assertTrue(UrlPolicy.externalHttps("https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2Fsignin"));
-        assertTrue(UrlPolicy.externalHttps("https://support.google.com/youtube/answer/3037019#zippy=%2Ccheck-that-youre-signed-into-youtube"));
+    @Test public void browserNavigationRejectsCredentialsAndMalformedUrls() {
+        assertTrue(UrlPolicy.browsableHttps("https://example.com/path?q=youtube"));
+        assertTrue(UrlPolicy.browsableHttps("https://accounts.google.com/ServiceLogin?service=youtube&continue=https%3A%2F%2Fwww.youtube.com%2Fsignin"));
+        assertTrue(UrlPolicy.browsableHttps("https://support.google.com/youtube/answer/3037019#zippy=%2Ccheck-that-youre-signed-into-youtube"));
         for (String url : new String[] {
             "https://user:secret@example.com/", "https://example.com:8443/",
             "https://", "http://example.com/", "intent://example.com/", null
-        }) assertFalse(url, UrlPolicy.externalHttps(url));
+        }) assertFalse(url, UrlPolicy.browsableHttps(url));
     }
 }

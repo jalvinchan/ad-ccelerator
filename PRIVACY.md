@@ -1,26 +1,42 @@
 # YouTube Ad Accelerator privacy
 
-This standalone Android app loads YouTube’s mobile website in Android WebView.
-YouTube and its supporting media, advertising, and analytics services receive
-network requests, your IP address, and information associated with browsing and
-playback. Their processing is governed by Google’s and YouTube’s privacy policies.
-The app does not operate inside the official YouTube app.
+This Android app embeds Mozilla's GeckoView browser engine. It loads YouTube and
+other HTTPS sites inside its own browser profile. Websites and their supporting
+media, advertising, and analytics services receive network requests, your IP
+address, and information associated with browsing, account sign-in, and playback.
+Their processing is governed by their respective privacy policies. This is not
+an app running inside the official YouTube app.
 
-WebView stores first-party cookies, website storage, and cache on the device.
-Third-party cookies are disabled. The acceleration preference is stored locally.
-Uninstalling the app or clearing its storage removes its locally stored data.
-Cloud backup and device transfer of app data are excluded.
+GeckoView stores cookies, website storage, cache, and its installed extension
+locally. First-party cookies are accepted; third-party cookies are isolated by
+site, using GeckoView's browser setting. External browsers and the old WebView
+have separate storage; their cookies are not copied into GeckoView. The
+acceleration preference is stored locally. Uninstalling or clearing app storage
+removes local data. Cloud backup and device transfer of app data are excluded.
 
-The accelerator changes only playback speed while the selected player signals
-an ad. It does not click ads or Skip, seek, mute, or alter volume. The app itself
-has no telemetry, analytics SDK, remote diagnostics service, or native JavaScript
-bridge. Up to 30 diagnostic events are kept in page memory until a new document
-loads; debug builds expose WebView inspection to local development tools. Events
-may also appear in local device logs. Do not share logs without reviewing them.
+Google's sign-in pages can open inside this browser. Account sign-in has not
+been tested to completion and may still be restricted by Google. Credentials
+are entered into Google's page; the accelerator is not loaded on Google account
+pages. The app does not implement its own account service or cookie transfer.
 
-Only the Android Internet permission is declared; there are no runtime permission
-prompts. User-initiated external HTTPS links open in a browser, which has its own
-storage and privacy policy. Account sign-in is not supported as a first-version
-feature, and Google may reject sign-in in an embedded WebView.
+The bundled accelerator runs only on exact HTTPS mobile/desktop YouTube origins.
+It changes playbackRate during detected ads and restores content speed; it does
+not click ads or Skip, seek, mute, or change volume. A privileged, isolated
+extension channel exchanges only enable/pause state and player status with the
+native UI. No page-accessible native JavaScript bridge is exposed. Up to 30
+controller diagnostics remain in extension memory until the document is replaced.
+Debug builds enable local Firefox inspection and console logs; release builds do
+not. Review device logs before sharing them.
 
-This is an independent experimental app, not a Google or YouTube product.
+The app adds no telemetry collection or remote diagnostics endpoint. GeckoView
+is a bundled third-party browser engine and may make its own service requests,
+for example for browser security functions. This statement does not claim that
+website traffic or the engine is offline.
+
+The merged APK declares Internet, network-state, wake-lock, and audio-settings
+permissions supplied by the browser engine, plus AndroidX's app-specific internal
+receiver permission. No camera, microphone, location, or contacts permission is
+requested. Site permission requests are denied. The native lifecycle pauses media
+when the app is backgrounded.
+
+This is an independent experimental app, not a Mozilla, Google, or YouTube product.

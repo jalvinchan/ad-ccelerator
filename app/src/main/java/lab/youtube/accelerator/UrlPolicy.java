@@ -3,7 +3,7 @@ package lab.youtube.accelerator;
 import java.net.URI;
 import java.net.URISyntaxException;
 
-/** Top-level navigation policy. YouTube subresources are handled by WebView. */
+/** Navigation and extension-origin policy. Subresources are handled by GeckoView. */
 final class UrlPolicy {
     static boolean trusted(String url) {
         URI uri = secureUrl(url);
@@ -11,7 +11,7 @@ final class UrlPolicy {
             "www.youtube.com".equals(uri.getHost()));
     }
 
-    static boolean externalHttps(String url) {
+    static boolean browsableHttps(String url) {
         return secureUrl(url) != null;
     }
 
