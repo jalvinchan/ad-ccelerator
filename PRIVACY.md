@@ -11,7 +11,11 @@ GeckoView stores cookies, website storage, cache, and its installed extension
 locally. First-party cookies are accepted; third-party cookies are isolated by
 site, using GeckoView's browser setting. External browsers and the old WebView
 have separate storage; their cookies are not copied into GeckoView. The
-acceleration preference is stored locally. Uninstalling or clearing app storage
+app does not store a separate search history or acceleration preference. YouTube
+owns its search UI and history within the browser profile. Retired prototype
+search-history and toggle preferences are removed on startup. Content-speed
+selection stays in document memory
+and resets on a new video or fresh load. Uninstalling or clearing app storage
 removes local data. Cloud backup and device transfer of app data are excluded.
 
 Google's sign-in pages can open inside this browser. Account sign-in has not
@@ -22,8 +26,9 @@ pages. The app does not implement its own account service or cookie transfer.
 The bundled accelerator runs only on exact HTTPS mobile/desktop YouTube origins.
 It changes playbackRate during detected ads and restores content speed; it does
 not click ads or Skip, seek, mute, or change volume. A privileged, isolated
-extension channel exchanges only enable/pause state and player status with the
-native UI. No page-accessible native JavaScript bridge is exposed. Up to 30
+extension channel exchanges lifecycle state and validated context-bound
+content-speed commands/status with the native UI. No page-accessible native
+JavaScript bridge is exposed. Up to 30
 controller diagnostics remain in extension memory until the document is replaced.
 Debug builds enable local Firefox inspection and console logs; release builds do
 not. Review device logs before sharing them.

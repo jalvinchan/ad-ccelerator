@@ -13,8 +13,8 @@ android {
         applicationId = "lab.youtube.accelerator"
         minSdk = 26
         targetSdk = 36
-        versionCode = 3
-        versionName = "0.2.1"
+        versionCode = 7
+        versionName = "0.4.1"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -49,7 +49,7 @@ abstract class AcceleratorAssets : DefaultTask() {
 
 val acceleratorAssets = tasks.register<AcceleratorAssets>("acceleratorAssets") {
     scripts.from(rootProject.file("src/ad-session.js"), rootProject.file("src/page-controller.js"),
-        rootProject.file("src/gecko-host.js"), rootProject.file("src/manifest.json"))
+        rootProject.file("src/gecko-host.js"), rootProject.file("src/player-controls.js"), rootProject.file("src/manifest.json"))
     outputDirectory.set(layout.buildDirectory.dir("generated/acceleratorAssets"))
 }
 androidComponents.onVariants { variant ->

@@ -1,26 +1,26 @@
 package lab.youtube.accelerator;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.annotation.SuppressLint;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.ActivityInfo;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
-import android.text.InputType;
 import android.view.View;
+import android.view.MotionEvent;
+import android.view.Gravity;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
-import android.view.inputmethod.EditorInfo;
-import android.view.inputmethod.InputMethodManager;
 import android.widget.Button;
-import android.widget.EditText;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
 import android.window.OnBackInvokedDispatcher;
 import org.json.JSONException;
 import org.json.JSONObject;
@@ -48,11 +48,9 @@ public final class MainActivity extends Activity {
     private FrameLayout root;
     private LinearLayout controls;
     private TextView status;
-    private EditText address;
     private WebExtension.Port port;
     private GeckoSession.SessionState sessionState;
     private String currentUrl = HOME;
-    private boolean enabled;
     private boolean paused = true;
     private boolean canGoBack;
     private boolean fullscreen;
@@ -60,6 +58,20 @@ public final class MainActivity extends Activity {
     private boolean loadFailed;
     private int previousSystemUiVisibility;
     private int revision;
+    private int previousOrientation;
+    private Button reloadButton;
+    private TextView refreshHint;
+    private float scrollY;
+    private boolean scrollKnown;
+    private boolean pulling;
+    private float pullX;
+    private float pullY;
+    private Button fullscreenSpeedButton;
+    private String videoContext;
+    private double contentRate = 1;
+    private int commandId;
+    private int pendingCommand;
+    private AlertDialog speedSelector;
 
     private final Runnable suspendSession = () -> {
         if (paused && session != null && session.isOpen()) session.setActive(false);
@@ -67,7 +79,8 @@ public final class MainActivity extends Activity {
 
     @Override public void onCreate(Bundle savedState) {
         super.onCreate(savedState);
-        enabled = getPreferences(MODE_PRIVATE).getBoolean("enabled", true);
+        // Retire prototype-only preferences without touching the browser profile.
+        getPreferences(MODE_PRIVATE).edit().remove("enabled").remove("searchHistory").apply();
         buildUi();
         if (Build.VERSION.SDK_INT >= 33) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
@@ -107,14 +120,12 @@ public final class MainActivity extends Activity {
                         port = connection;
                         connection.setDelegate(new WebExtension.PortDelegate() {
                             @Override public void onPortMessage(Object message, WebExtension.Port source) {
-                                receiveStatus(message, source);
+                                receiveMessage(message, source);
                             }
                             @Override public void onDisconnect(WebExtension.Port source) {
                                 if (port == source) {
                                     port = null;
-                                    if (!loadFailed && UrlPolicy.trusted(currentUrl)) {
-                                        status.setText(R.string.connecting_accelerator);
-                                    }
+                                    resetContentControls();
                                 }
                             }
                         });
@@ -128,10 +139,11 @@ public final class MainActivity extends Activity {
                 if (sessionState != null) session.restoreState(sessionState);
                 else session.loadUri(HOME);
             }, error -> {
-                if (!isDestroyed()) status.setText(R.string.assets_unavailable);
+                if (!isDestroyed()) showError(R.string.assets_unavailable);
             });
     }
 
+    @SuppressLint("ClickableViewAccessibility") // Observer only: Gecko handles taps and its accessibility tree.
     private void buildUi() {
         root = new FrameLayout(this);
         LinearLayout browser = new LinearLayout(this);
@@ -152,63 +164,88 @@ public final class MainActivity extends Activity {
         controls = new LinearLayout(this);
         controls.setOrientation(LinearLayout.VERTICAL);
         browser.addView(controls);
-        LinearLayout toolbar = new LinearLayout(this);
-        toolbar.setPadding(dp(8), 0, dp(8), 0);
-        Button home = new Button(this);
-        home.setText(R.string.home);
-        home.setOnClickListener(view -> navigate(HOME));
-        toolbar.addView(home, new LinearLayout.LayoutParams(0, -2, 1));
-        Button reload = new Button(this);
-        reload.setText(R.string.reload);
-        reload.setOnClickListener(view -> {
-            if (!extensionReady) return;
-            if (loadFailed) navigate(UrlPolicy.browsableHttps(currentUrl) ? currentUrl : HOME);
-            else session.reload();
-        });
-        toolbar.addView(reload, new LinearLayout.LayoutParams(0, -2, 1));
-        controls.addView(toolbar);
-        address = new EditText(this);
-        address.setSingleLine(true);
-        address.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
-        address.setImeOptions(EditorInfo.IME_ACTION_GO);
-        address.setMinHeight(dp(48));
-        address.setContentDescription(getString(R.string.page_address));
-        address.setText(HOME);
-        address.setOnEditorActionListener((view, action, event) -> {
-            if (action != EditorInfo.IME_ACTION_GO) return false;
-            String url = address.getText().toString().trim();
-            if (!url.contains(":")) url = "https://" + url;
-            navigate(url);
-            address.clearFocus();
-            ((InputMethodManager) getSystemService(INPUT_METHOD_SERVICE))
-                .hideSoftInputFromWindow(address.getWindowToken(), 0);
-            return true;
-        });
-        controls.addView(address, new LinearLayout.LayoutParams(-1, -2));
-        Switch accelerate = new Switch(this);
-        accelerate.setText(R.string.accelerate_ads);
-        accelerate.setPadding(dp(16), 0, dp(16), 0);
-        accelerate.setMinHeight(dp(48));
-        accelerate.setChecked(enabled);
-        accelerate.setOnCheckedChangeListener((button, checked) -> {
-            enabled = checked;
-            getPreferences(MODE_PRIVATE).edit().putBoolean("enabled", checked).apply();
-            applyState();
-            showIdleStatus();
-        });
-        controls.addView(accelerate, new LinearLayout.LayoutParams(-1, -2));
+        reloadButton = new Button(this);
+        reloadButton.setText(R.string.reload);
+        reloadButton.setOnClickListener(view -> reloadPage());
+        reloadButton.setVisibility(View.GONE);
+        controls.addView(reloadButton);
         status = new TextView(this);
         status.setPadding(dp(16), dp(4), dp(16), dp(8));
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        status.setText(R.string.starting_browser);
+        status.setVisibility(View.GONE);
         controls.addView(status);
         web = new GeckoView(this);
         browser.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
+        web.setOnTouchListener((view, event) -> {
+            switch (event.getActionMasked()) {
+                case MotionEvent.ACTION_DOWN:
+                    pulling = pageAtTop() && !fullscreen && !paused && !loadFailed;
+                    pullX = event.getX();
+                    pullY = event.getY();
+                    break;
+                case MotionEvent.ACTION_MOVE:
+                    if (event.getPointerCount() != 1 || !pageAtTop()
+                        || Math.abs(event.getX() - pullX) > dp(32) || event.getY() < pullY) pulling = false;
+                    refreshHint.setVisibility(pulling && event.getY() - pullY >= dp(96) ? View.VISIBLE : View.GONE);
+                    break;
+                case MotionEvent.ACTION_UP:
+                    boolean refresh = pulling && event.getY() - pullY >= dp(96);
+                    cancelPull();
+                    if (refresh) handler.post(this::reloadPage);
+                    break;
+                case MotionEvent.ACTION_POINTER_DOWN:
+                case MotionEvent.ACTION_CANCEL:
+                    cancelPull();
+                    break;
+                default: break;
+            }
+            return false; // Gecko keeps ownership of scrolling and player gestures.
+        });
+        refreshHint = new TextView(this);
+        refreshHint.setText(R.string.release_to_reload);
+        refreshHint.setTextColor(Color.WHITE);
+        refreshHint.setBackgroundColor(Color.DKGRAY);
+        refreshHint.setPadding(dp(16), dp(8), dp(16), dp(8));
+        root.addView(refreshHint, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL));
+        refreshHint.setVisibility(View.GONE);
         browser.setFocusableInTouchMode(true);
         browser.requestFocus();
+        fullscreenSpeedButton = new Button(this);
+        fullscreenSpeedButton.setOnClickListener(view -> chooseSpeed());
+        fullscreenSpeedButton.setAllCaps(false);
+        FrameLayout.LayoutParams overlay = new FrameLayout.LayoutParams(dp(88), dp(48), Gravity.TOP | Gravity.END);
+        overlay.setMargins(dp(8), dp(8), dp(8), 0);
+        root.addView(fullscreenSpeedButton, overlay);
+        fullscreenSpeedButton.setVisibility(View.GONE);
+        resetContentControls();
+    }
+
+    private boolean pageAtTop() {
+        // APZ can report subpixel rounding (including small negative values) at the top edge.
+        return scrollKnown && scrollY <= 1;
+    }
+
+    private void cancelPull() {
+        pulling = false;
+        refreshHint.setVisibility(View.GONE);
+    }
+
+    private void reloadPage() {
+        cancelPull();
+        if (!extensionReady || paused || fullscreen) return;
+        if (loadFailed) navigate(UrlPolicy.browsableHttps(currentUrl) ? currentUrl : HOME);
+        else session.reload();
     }
 
     private void installDelegates() {
+        // Compositor updates include the initial viewport and asynchronous gesture scrolling.
+        session.setCompositorScrollDelegate(new GeckoSession.CompositorScrollDelegate() {
+            @Override public void onScrollChanged(GeckoSession source, GeckoSession.ScrollPositionUpdate position) {
+                scrollKnown = true;
+                scrollY = position.scrollY;
+                if (!pageAtTop()) cancelPull();
+            }
+        });
         session.setNavigationDelegate(new GeckoSession.NavigationDelegate() {
             @Override public GeckoResult<AllowOrDeny> onLoadRequest(GeckoSession source, LoadRequest request) {
                 if (!UrlPolicy.browsableHttps(request.uri)) return GeckoResult.fromValue(AllowOrDeny.DENY);
@@ -222,27 +259,37 @@ public final class MainActivity extends Activity {
             @Override public void onLocationChange(GeckoSession source, String url,
                     List<GeckoSession.PermissionDelegate.ContentPermission> permissions, Boolean gesture) {
                 if (url == null) return;
+                resetContentControls();
                 currentUrl = url;
-                address.setText(url);
-                showIdleStatus();
+                if (!loadFailed) status.setVisibility(View.GONE);
             }
             @Override public void onCanGoBack(GeckoSession source, boolean available) { canGoBack = available; }
             @Override public GeckoResult<String> onLoadError(GeckoSession source, String uri, WebRequestError error) {
                 loadFailed = true;
-                status.setText(R.string.load_error);
+                resetContentControls();
+                showFullscreen(false);
+                showError(R.string.load_error);
                 return null; // Retain Gecko's normal error page and certificate protections.
             }
         });
         session.setProgressDelegate(new GeckoSession.ProgressDelegate() {
             @Override public void onPageStart(GeckoSession source, String url) {
                 loadFailed = false;
+                scrollKnown = false;
+                cancelPull();
+                reloadButton.setVisibility(View.GONE);
+                resetContentControls();
+                showFullscreen(false);
                 if (port != null) { port.disconnect(); port = null; }
-                status.setText(R.string.loading);
+                status.setVisibility(View.GONE);
             }
             @Override public void onPageStop(GeckoSession source, boolean success) {
                 loadFailed = !success;
-                if (success) showIdleStatus();
-                else status.setText(R.string.load_error);
+                if (success) {
+                    status.setVisibility(View.GONE);
+                    reloadButton.setVisibility(View.GONE);
+                }
+                else showError(R.string.load_error);
             }
             @Override public void onSessionStateChange(GeckoSession source, GeckoSession.SessionState state) {
                 sessionState = state;
@@ -265,9 +312,10 @@ public final class MainActivity extends Activity {
 
     private void recoverSession(GeckoSession source) {
         port = null;
+        resetContentControls();
         loadFailed = true;
         showFullscreen(false);
-        status.setText(R.string.browser_crashed);
+        showError(R.string.browser_crashed);
         source.open(runtime);
         source.setActive(!paused);
         // Reload loads currentUrl explicitly because a reopened session has no history.
@@ -275,49 +323,140 @@ public final class MainActivity extends Activity {
 
     private void navigate(String url) {
         if (!UrlPolicy.browsableHttps(url)) {
-            status.setText(R.string.https_required);
-            address.setText(currentUrl);
+            showError(R.string.https_required);
         } else if (extensionReady) session.loadUri(url);
     }
 
     private void applyState() {
         if (port == null) return;
         try {
-            port.postMessage(new JSONObject().put("type", "state").put("enabled", enabled)
+            port.postMessage(new JSONObject().put("type", "state").put("enabled", true)
                 .put("paused", paused).put("revision", ++revision));
         } catch (JSONException error) {
             throw new IllegalStateException(error);
         }
     }
 
-    private void receiveStatus(Object message, WebExtension.Port source) {
+    private void receiveMessage(Object message, WebExtension.Port source) {
         if (source != port || !(message instanceof JSONObject) || isDestroyed()) return;
         JSONObject state = (JSONObject) message;
-        if (!"status".equals(state.optString("type")) || state.optInt("revision", -1) != revision) return;
+        if (!NativeProtocol.integer(state.opt("revision"), revision)) return;
+        Object type = state.opt("type");
+        if ("open-speed-selector".equals(type)) {
+            if (!paused && !loadFailed && !fullscreen && currentDocument(state)
+                && videoContextEquals(state.opt("videoContext")) && speedSelector == null) chooseSpeed();
+            return;
+        }
+        if ("speed-result".equals(type)) {
+            if (paused || !NativeProtocol.integer(state.opt("commandId"), pendingCommand)
+                || pendingCommand == 0 || !(state.opt("accepted") instanceof Boolean)
+                || !videoContextEquals(state.opt("videoContext"))) return;
+            pendingCommand = 0;
+            if (Boolean.FALSE.equals(state.opt("accepted"))) showSpeedError();
+            return;
+        }
+        if (!"status".equals(type) || !(state.opt("paused") instanceof Boolean)
+            || !(state.opt("enabled") instanceof Boolean) || !(state.opt("adActive") instanceof Boolean)
+            || !NativeProtocol.contentRate(state.opt("contentRate"))
+            || !optionalRate(state, "rate") || !optionalRate(state, "contentAppliedRate")
+            || !state.has("videoContext") || !state.has("contentError")
+            || !(state.isNull("videoContext") || NativeProtocol.context(state.opt("videoContext")))
+            || !(state.isNull("contentError") || "rate-rejected".equals(state.opt("contentError")))) return;
         if (paused) {
-            if (state.optBoolean("paused")) {
+            if (Boolean.TRUE.equals(state.opt("paused"))) {
                 handler.removeCallbacks(suspendSession);
                 suspendSession.run();
             }
             return;
         }
-        if (!UrlPolicy.trusted(currentUrl) || loadFailed) return;
-        if (!enabled) status.setText(R.string.acceleration_off);
-        else if (!state.optBoolean("adActive")) status.setText(R.string.waiting_for_ad);
-        else if (state.isNull("rate")) status.setText(R.string.ad_speed_unavailable);
-        else status.setText(getString(R.string.ad_speed, state.optDouble("rate")));
+        if (!currentDocument(state) || loadFailed || !Boolean.FALSE.equals(state.opt("paused"))
+            || !Boolean.TRUE.equals(state.opt("enabled"))) return;
+        String context = state.isNull("videoContext") ? null : (String) state.opt("videoContext");
+        if (videoContext != null && !videoContext.equals(context) && speedSelector != null) speedSelector.dismiss();
+        videoContext = context;
+        contentRate = ((Number) state.opt("contentRate")).doubleValue();
+        boolean rejected = !state.isNull("contentError") || (!state.isNull("contentAppliedRate")
+            && ((Number) state.opt("contentAppliedRate")).doubleValue() != contentRate);
+        updateSpeedControls(rejected);
+
     }
 
-    private void showIdleStatus() {
-        if (loadFailed) return;
-        status.setText(!UrlPolicy.trusted(currentUrl) ? R.string.acceleration_youtube_only :
-            !enabled ? R.string.acceleration_off :
-            port == null ? R.string.connecting_accelerator : R.string.waiting_for_ad);
+    private static boolean optionalRate(JSONObject state, String key) {
+        return state.has(key) && NativeProtocol.optionalRate(state.isNull(key) ? null : state.opt(key));
+    }
+
+    private boolean currentDocument(JSONObject state) {
+        return UrlPolicy.trusted(currentUrl) && currentUrl.equals(state.opt("url"));
+    }
+
+    private boolean videoContextEquals(Object value) {
+        return videoContext != null && videoContext.equals(value);
+    }
+
+    private void resetContentControls() {
+        videoContext = null;
+        contentRate = 1;
+        pendingCommand = 0;
+        if (speedSelector != null) speedSelector.dismiss();
+        updateSpeedControls(false);
+    }
+
+    private void updateSpeedControls(boolean rejected) {
+        String label = rejected ? getString(R.string.speed_unavailable) : getString(R.string.content_speed, rateLabel(contentRate));
+        fullscreenSpeedButton.setText(rejected ? "! ×" : rateLabel(contentRate) + "×");
+        fullscreenSpeedButton.setContentDescription(label);
+        fullscreenSpeedButton.setEnabled(videoContext != null && !paused);
+    }
+
+    private static String rateLabel(double rate) {
+        return java.math.BigDecimal.valueOf(rate).stripTrailingZeros().toPlainString();
+    }
+
+    private void chooseSpeed() {
+        if (port == null || videoContext == null || paused) return;
+        String context = videoContext;
+        WebExtension.Port connection = port;
+        String[] labels = new String[NativeProtocol.CONTENT_RATES.length];
+        int checked = -1;
+        for (int i = 0; i < labels.length; i++) {
+            labels[i] = rateLabel(NativeProtocol.CONTENT_RATES[i]) + "×";
+            if (NativeProtocol.CONTENT_RATES[i] == contentRate) checked = i;
+        }
+        speedSelector = new AlertDialog.Builder(this).setTitle(R.string.playback_speed)
+            .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                dialog.dismiss();
+                if (connection != port || !videoContextEquals(context) || paused) { showSpeedError(); return; }
+                try {
+                    int id = ++commandId;
+                    pendingCommand = id;
+                    connection.postMessage(new JSONObject().put("type", "content-speed").put("revision", revision)
+                        .put("videoContext", context).put("commandId", id).put("rate", NativeProtocol.CONTENT_RATES[which]));
+                    handler.postDelayed(() -> {
+                        if (pendingCommand == id) { pendingCommand = 0; showSpeedError(); }
+                    }, 2000);
+                } catch (JSONException error) { throw new IllegalStateException(error); }
+            }).setNegativeButton(android.R.string.cancel, null).create();
+        speedSelector.setOnDismissListener(dialog -> speedSelector = null);
+        speedSelector.show();
+    }
+
+    private void showSpeedError() { Toast.makeText(this, R.string.speed_rejected, Toast.LENGTH_SHORT).show(); }
+
+    private void showError(int message) {
+        status.setText(message);
+        status.setVisibility(View.VISIBLE);
+        reloadButton.setVisibility(extensionReady ? View.VISIBLE : View.GONE);
     }
 
     private void showFullscreen(boolean active) {
         if (fullscreen == active) return;
         fullscreen = active;
+        cancelPull();
+        if (active) {
+            previousOrientation = getRequestedOrientation();
+            setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
+        } else setRequestedOrientation(previousOrientation);
+        fullscreenSpeedButton.setVisibility(active ? View.VISIBLE : View.GONE);
         controls.setVisibility(active ? View.GONE : View.VISIBLE);
         root.setBackgroundColor(active ? Color.BLACK : Color.TRANSPARENT);
         if (active) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -346,6 +485,9 @@ public final class MainActivity extends Activity {
 
     @Override protected void onPause() {
         paused = true;
+        cancelPull();
+        if (speedSelector != null) speedSelector.dismiss();
+        updateSpeedControls(false);
         applyState();
         // Restore speed and pause media before suspension; bound the wait if content hangs.
         if (port == null) suspendSession.run();
@@ -364,12 +506,14 @@ public final class MainActivity extends Activity {
     @Override public void onBackPressed() { handleBack(); }
 
     private void handleBack() {
-        if (fullscreen) session.exitFullScreen();
+        if (fullscreen) { session.exitFullScreen(); showFullscreen(false); }
         else if (canGoBack) session.goBack();
         else finish();
     }
 
     @Override protected void onDestroy() {
+        showFullscreen(false);
+        if (speedSelector != null) speedSelector.dismiss();
         handler.removeCallbacksAndMessages(null);
         if (port != null) { port.disconnect(); port = null; }
         if (web != null) web.releaseSession();

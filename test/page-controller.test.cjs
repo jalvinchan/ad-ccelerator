@@ -5,7 +5,7 @@ const vm = require("node:vm");
 const core = readFileSync(require.resolve("../src/ad-session.js"), "utf8");
 const controller = readFileSync(require.resolve("../src/page-controller.js"), "utf8");
 
-async function page({ stored = true } = {}) {
+async function page({ stored = true, rate = 2 } = {}) {
   const timers = new Map();
   const intervals = new Map();
   const navigation = new Map();
@@ -34,6 +34,7 @@ async function page({ stored = true } = {}) {
   const buttons = [button];
   const candidates = [player];
   const sandbox = vm.createContext({
+    URL, location: { href: "https://m.youtube.com/watch?v=first" },
     performance: { now: () => 313 }, Date,
     console: { info() {} },
     getComputedStyle: element => ({ display: element.display ?? "block", visibility: "visible", opacity: "1" }),
@@ -52,19 +53,21 @@ async function page({ stored = true } = {}) {
   vm.runInContext(core, sandbox);
   vm.runInContext(controller, sandbox);
   sandbox.YouTubeAdAccelerator.setEnabled(stored);
+  if (rate !== 1) sandbox.YouTubeAdAccelerator.setContentRate(rate, sandbox.YouTubeAdAccelerator.getStatus().videoContext);
   await Promise.resolve();
   return {
     video, player, button, buttons, candidates, sandbox, timers, intervals,
     scan() { observe(); const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(callback => callback()); },
+    speed(value, context = sandbox.YouTubeAdAccelerator.getStatus().videoContext) { return sandbox.YouTubeAdAccelerator.setContentRate(value, context); },
     change(value) { sandbox.YouTubeAdAccelerator.setEnabled(value); },
     navigation(event) { navigation.get(event)(); },
     status() { return sandbox.YouTubeAdAccelerator.getStatus(); },
   };
 }
 
-test("controller leaves normal content alone, accelerates an ad, and restores cached normal speed", async () => {
+test("controller owns content speed, accelerates an ad, and restores selected speed", async () => {
   const current = await page();
-  current.video.playbackRate = 3;
+  assert.equal(current.speed(3).accepted, true);
   current.scan();
   assert.equal(current.intervals.size, 0);
   current.player.ad = true;
@@ -135,7 +138,7 @@ test("disabling or navigating immediately restores speed and stops the watchdog"
     assert.equal(current.intervals.size, 0);
     current.scan();
     assert.equal(current.video.playbackRate, 2);
-    assert.equal(current.status().adActive, false);
+    assert.equal(current.status().rate, null);
   }
 });
 
@@ -162,10 +165,10 @@ test("saved disable starts without acceleration", async () => {
   assert.equal(current.status().enabled, false);
 });
 
-test("injection during an ad uses the initial speed and retains only 30 diagnostics", async () => {
+test("ad toggles restore the selected speed and retain only 30 diagnostics", async () => {
   const current = await page({ stored: false });
   current.player.ad = true;
-  current.video.playbackRate = 1.5;
+  current.speed(1.5);
   for (let i = 0; i < 15; i++) {
     current.change(true);
     assert.equal(current.video.playbackRate, 16);
@@ -190,7 +193,7 @@ test("hidden players are left alone and replacing an ad video restores the origi
   assert.equal(current.video.playbackRate, 2);
   assert.equal(replacement.playbackRate, 16);
   current.change(false);
-  assert.equal(replacement.playbackRate, 1.5);
+  assert.equal(replacement.playbackRate, 2);
 });
 
 test("reinjection during an ad preserves a single session and watchdog", async () => {
@@ -203,4 +206,89 @@ test("reinjection during an ad preserves a single session and watchdog", async (
   assert.equal(current.status().events.filter(event => event.event === "ad-start").length, 1);
   current.change(false);
   assert.equal(current.video.playbackRate, 2);
+});
+
+test("fresh documents and different videos start at 1×; stale commands cannot change them", async () => {
+  const current = await page({ rate: 1 });
+  assert.equal(current.video.playbackRate, 1);
+  const context = current.status().videoContext;
+  assert.equal(current.speed(4).accepted, true);
+  current.sandbox.location.href = "https://m.youtube.com/watch?v=second";
+  assert.equal(current.speed(3, context).error, "stale-context");
+  assert.equal(current.video.playbackRate, 1);
+  assert.notEqual(current.status().videoContext, context);
+  for (const rate of [0, -1, 16, NaN, Infinity, "2", 1.1])
+    assert.equal(current.speed(rate).error, "invalid-rate");
+  assert.equal(current.video.playbackRate, 1);
+});
+
+test("speed changes during ads apply afterward, across consecutive ads and replacements", async () => {
+  const current = await page();
+  const context = current.status().videoContext;
+  current.player.ad = true;
+  current.scan();
+  assert.equal(current.speed(2.25).pending, true);
+  assert.equal(current.video.playbackRate, 16);
+  const replacement = { ...current.video, playbackRate: 1 };
+  current.player.querySelector = () => replacement;
+  current.scan();
+  assert.equal(current.video.playbackRate, 2.25);
+  assert.equal(replacement.playbackRate, 16);
+  assert.equal(current.status().videoContext, context);
+  current.player.ad = false;
+  current.scan();
+  assert.equal(replacement.playbackRate, 2.25);
+  current.player.ad = true;
+  current.scan();
+  assert.equal(replacement.playbackRate, 16);
+  current.player.ad = false;
+  current.scan();
+  assert.equal(replacement.playbackRate, 2.25);
+});
+
+test("content speed works with acceleration off, survives pause and same-video navigation", async () => {
+  const current = await page({ stored: false });
+  current.speed(0.75);
+  const context = current.status().videoContext;
+  assert.equal(current.video.playbackRate, 0.75);
+  current.player.ad = true;
+  current.video.playbackRate = 1;
+  current.scan();
+  assert.equal(current.speed(4).pending, true);
+  assert.equal(current.video.playbackRate, 1);
+  current.sandbox.YouTubeAdAccelerator.setSuspended(true);
+  assert.equal(current.speed(2, context).error, "stale-context");
+  current.navigation("pageshow");
+  current.sandbox.YouTubeAdAccelerator.setSuspended(false);
+  current.player.ad = false;
+  current.scan();
+  assert.equal(current.video.playbackRate, 4);
+  current.navigation("yt-navigate-start");
+  current.sandbox.location.href += "&list=playlist";
+  current.navigation("yt-navigate-finish");
+  current.scan();
+  assert.equal(current.video.playbackRate, 4);
+  assert.equal(current.status().videoContext, context);
+});
+
+test("rejected content rates are reported, including an accepted ad-time choice rejected on restoration", async () => {
+  const current = await page({ rate: 1 });
+  let actual = 1;
+  Object.defineProperty(current.video, "playbackRate", {
+    configurable: true, get: () => actual,
+    set(value) { if (value === 2.25) throw new Error("unsupported"); actual = value; },
+  });
+  assert.equal(current.speed(2.25).error, "rate-rejected");
+  assert.equal(current.status().contentRate, 1);
+  assert.equal(current.status().contentError, "rate-rejected");
+  assert.equal(current.video.playbackRate, 1);
+  current.player.ad = true;
+  current.scan();
+  assert.equal(current.speed(2.25).accepted, true);
+  current.player.ad = false;
+  current.scan();
+  assert.equal(current.status().contentError, "rate-rejected");
+  assert.notEqual(current.status().contentAppliedRate, 2.25);
+  assert.equal(current.speed(1.25).accepted, true);
+  assert.equal(current.status().contentError, null);
 });

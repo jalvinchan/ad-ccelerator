@@ -11,14 +11,22 @@ The Google sign-in form opens inside this browser, but completing sign-in and
 playing YouTube videos afterward have not been tested. Changing engines does not
 guarantee that YouTube will allow playback. See [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
-The native controls provide Home, Reload, an HTTPS address field, a saved
-acceleration switch, status, fullscreen, and Back navigation. HTTPS links remain
-in the app, including Google sign-in and help pages. New-window links open in the
-same tab. The extension runs only on exact HTTPS `m.youtube.com` and
-`www.youtube.com` origins; other websites never receive the accelerator.
+Normal mode has no native toolbar: use YouTube’s Home navigation and pull down
+from the top of the page to reload. A Reload button appears for page/browser
+errors. A small speed chip sits near the video’s upper-right corner on open
+videos, follows playback controls, and fades during playback. Ad acceleration
+is always on; routine status banners remain hidden.
+Fullscreen overrides portrait lock and restores the previous orientation policy
+on exit. Normal and fullscreen selectors offer 0.25× through 4×, including 2.25×. Each new
+video starts at 1×; the current selection survives ads, rotation, and
+background/resume. Selecting during an ad changes the rate restored afterward.
+YouTube provides its own search suggestions and history; the app adds no separate
+search history. HTTPS links remain in the app, including sign-in and help pages.
+New-window links open in the same tab. The extension runs only on exact HTTPS
+`m.youtube.com` and `www.youtube.com` origins.
 
 The shared controller tries 16×, 8×, then 4× during detected ads and restores the
-observed content speed afterward. It changes only playbackRate: no seeking,
+selected content speed afterward. It changes only playbackRate: no seeking,
 muting, Skip clicks, ad blocking, downloads, or official YouTube app automation.
 Backgrounding restores speed and pauses video; returning does not call play().
 
@@ -51,7 +59,7 @@ adb -s <device-id> shell am start -n lab.youtube.accelerator/.MainActivity
 ```
 
 The ARM64 debug APK is approximately 188 MiB because it includes the browser
-engine. APK updates retain the acceleration preference. GeckoView creates its
+engine. APK updates retain the browser profile. Retired prototype preferences are removed. GeckoView creates its
 own browser profile; old WebView and external-browser cookies are not imported.
 Release signing and distribution remain future work.
 
@@ -70,10 +78,14 @@ YouTube-origin document. It never injects the accelerator: the APK's installed
 extension must detect the fixture and change the actual video speed. It checks
 media-time advancement, native controls, pause/restoration, fullscreen/Back, and
 same-session HTTPS navigation. It returns to YouTube afterward. Use a test device;
-it changes the saved toggle and temporarily backgrounds the app. The fixture and
+it temporarily changes rotation settings and backgrounds the app. The fixture and
 test harness are not packaged in the APK.
 Emulator recording and accessibility automation have repeatability limits;
 see the verification notes before interpreting a harness failure or success.
+The harness temporarily locks portrait orientation and saves/restores the app’s
+both device rotation settings.
+Current 0.4.1 results and remaining live checks are in
+[docs/PROTOTYPE_UX_VERIFICATION.md](docs/PROTOTYPE_UX_VERIFICATION.md).
 
 For live acceptance, use a non-Premium session that permits playback and observe
 an actual ad. Verify the mobile ad signal, measured media time and shorter ad

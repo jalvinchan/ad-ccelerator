@@ -14,9 +14,16 @@ function host(url = 'https://m.youtube.com/watch?v=fixture', framed = false) {
   const context = vm.createContext({
     URL,
     location: { href: url, origin: new URL(url).origin },
+    YouTubePlayerControls(controller, open) {
+      state.openSelector = open;
+      return { update() {}, hide() {} };
+    },
     YouTubeAdAccelerator: {
       setEnabled(value) { state.enabled = value; effects.push(['enabled', value]); },
       setSuspended(value) { state.suspended = value; effects.push(['suspended', value]); },
+      setContentRate(rate, context) { effects.push(['speed', rate, context]);
+        return context === 'current' && [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.25, 3, 4].includes(rate)
+          ? {accepted: true, pending: false} : {accepted: false, error: 'stale-context'}; },
       getStatus() { return { enabled: state.enabled, adActive: false, rate: null }; },
     },
     document: {
@@ -53,13 +60,13 @@ const active = revision => ({ type: 'state', enabled: true, paused: false, revis
 
 test('extension stays suspended until a valid native state arrives; reinjection does not duplicate connections', () => {
   const current = host();
-  assert.deepEqual(current.state, { enabled: false, suspended: true });
+  assert.deepEqual({enabled:current.state.enabled, suspended:current.state.suspended}, { enabled: false, suspended: true });
   for (const message of [null, {}, { ...active(1), enabled: 'true' }, active(1.1), { ...active(1), type: 'eval' }]) {
     current.send(message);
-    assert.deepEqual(current.state, { enabled: false, suspended: true });
+    assert.deepEqual({enabled:current.state.enabled, suspended:current.state.suspended}, { enabled: false, suspended: true });
   }
   current.send(active(1));
-  assert.deepEqual(current.state, { enabled: true, suspended: false });
+  assert.deepEqual({enabled:current.state.enabled, suspended:current.state.suspended}, { enabled: true, suspended: false });
   vm.runInContext(code, current.context);
   assert.equal(current.connections.length, 1);
 });
@@ -90,7 +97,7 @@ test('hidden documents remain suspended despite native resume; disconnect disabl
   current.visibility(false);
   assert.equal(current.state.suspended, false);
   current.connections[0].disconnect();
-  assert.deepEqual(current.state, { enabled: false, suspended: true });
+  assert.deepEqual({enabled:current.state.enabled, suspended:current.state.suspended}, { enabled: false, suspended: true });
   assert.equal(current.intervals.size, 0);
   current.connections[0].receive(active(3));
   assert.equal(current.state.enabled, false);
@@ -103,7 +110,7 @@ test('page restoration reconnects and waits for host state instead of reviving p
   current.page('pageshow');
   assert.equal(current.connections.length, 2);
   assert.equal(current.intervals.size, 1);
-  assert.deepEqual(current.state, { enabled: false, suspended: true });
+  assert.deepEqual({enabled:current.state.enabled, suspended:current.state.suspended}, { enabled: false, suspended: true });
   current.send(active(6));
   assert.equal(current.state.enabled, true);
 });
@@ -114,4 +121,38 @@ test('no native connection from other origins, unusual ports, credential URLs, o
     assert.equal(host(url).connections.length, 0);
   }
   assert.equal(host('https://m.youtube.com/', true).connections.length, 0);
+});
+
+test('speed messages require live revision, typed values, and unique command IDs; rejection is explicit', () => {
+  const current = host();
+  current.send(active(2));
+  const command = {type:'content-speed', revision:2, commandId:1, videoContext:'current', rate:2};
+  for (const invalid of [{...command, revision:1}, {...command, rate:'2'}, {...command, commandId:1.5},
+    {...command, videoContext:{}}, {...command, videoContext:'x'.repeat(201)}]) current.send(invalid);
+  assert.equal(current.effects.filter(effect => effect[0] === 'speed').length, 0);
+  current.send(command);
+  current.send(command);
+  assert.equal(current.effects.filter(effect => effect[0] === 'speed').length, 1);
+  current.send({...command, commandId:2, videoContext:'old'});
+  assert.equal(current.effects.filter(effect => effect[1]?.type === 'speed-result').at(-1)[1].accepted, false);
+  current.send({...active(3), paused:true});
+  current.send({...command, revision:3, commandId:3});
+  assert.equal(current.effects.filter(effect => effect[0] === 'speed').length, 2);
+});
+
+
+test('video chip requests the native selector only while the host is active', () => {
+  const current = host();
+  current.state.openSelector('current');
+  assert.equal(current.effects.filter(effect => effect[1]?.type === 'open-speed-selector').length, 0);
+  current.send(active(7));
+  current.state.openSelector('current');
+  const request = current.effects.at(-1)[1];
+  assert.equal(request.type, 'open-speed-selector');
+  assert.equal(request.revision, 7);
+  assert.equal(request.videoContext, 'current');
+  assert.equal(request.url, 'https://m.youtube.com/watch?v=fixture');
+  current.visibility(true);
+  current.state.openSelector('current');
+  assert.equal(current.effects.filter(effect => effect[1]?.type === 'open-speed-selector').length, 1);
 });

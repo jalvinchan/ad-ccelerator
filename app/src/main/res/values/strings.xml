@@ -1,19 +1,13 @@
 <resources>
     <string name="app_name">YouTube Ad Accelerator</string>
-    <string name="home">Home</string>
     <string name="reload">Reload</string>
-    <string name="page_address">Page address</string>
-    <string name="starting_browser">Starting browser…</string>
-    <string name="connecting_accelerator">Connecting accelerator…</string>
-    <string name="acceleration_youtube_only">Acceleration runs on YouTube video pages only</string>
-    <string name="https_required">Enter an HTTPS address without credentials or a custom port.</string>
+    <string name="release_to_reload">Release to reload</string>
+    <string name="https_required">Only HTTPS links without credentials or custom ports are supported.</string>
     <string name="browser_crashed">Browser stopped unexpectedly. Tap Reload to recover.</string>
-    <string name="accelerate_ads">Accelerate ads</string>
-    <string name="acceleration_off">Acceleration off</string>
-    <string name="waiting_for_ad">Acceleration on · waiting for an ad</string>
-    <string name="ad_speed">Ad detected · %1$.1f×</string>
-    <string name="ad_speed_unavailable">Ad detected · speed unavailable</string>
     <string name="assets_unavailable">Unable to load the accelerator. Please reinstall the app.</string>
-    <string name="loading">Loading page…</string>
     <string name="load_error">Page could not load. Check your connection and tap Reload.</string>
+    <string name="content_speed">Speed %1$s×</string>
+    <string name="playback_speed">Playback speed</string>
+    <string name="speed_unavailable">Speed unavailable</string>
+    <string name="speed_rejected">Speed could not be applied. Try again on the current video.</string>
 </resources>

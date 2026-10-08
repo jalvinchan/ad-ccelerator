@@ -1,14 +1,14 @@
 {
   "manifest_version": 2,
   "name": "YouTube Ad Accelerator",
-  "version": "0.2.1",
+  "version": "0.4.1",
   "browser_specific_settings": {
     "gecko": { "id": "accelerator@ad-ccelerator.local" }
   },
   "permissions": ["geckoViewAddons", "nativeMessaging", "nativeMessagingFromContent"],
   "content_scripts": [{
     "matches": ["https://m.youtube.com/*", "https://www.youtube.com/*"],
-    "js": ["ad-session.js", "page-controller.js", "gecko-host.js"],
+    "js": ["ad-session.js", "page-controller.js", "player-controls.js", "gecko-host.js"],
     "run_at": "document_end",
     "all_frames": false
   }]
