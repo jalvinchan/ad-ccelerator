@@ -5,22 +5,30 @@ WebExtension that temporarily accelerates detected YouTube ads. Playback and
 acceleration run inside the same app and browser profile. Firefox does not need
 to be installed. This replaces the Android WebView prototype in commit `a117335`.
 
-**Experimental:** 0.4.1 passes controlled emulator acceptance. Earlier phone
-captures observed accelerated ads, but a repeatable improvement in live ad
-wall-clock duration and a fix for the subsequent loading gap remain unverified.
+**Experimental:** 0.4.3 passes Samsung normal-video native hold restoration
+and both speed-menu checks. Real-ad restoration was observed at 1×. Shorts
+hold-to-2× is human-verified; current results are recorded in Verification. Earlier 0.4.1 passed controlled emulator acceptance. The user confirms
+real ads accelerate and content speed is restored afterward. Quantitative live
+ad comparisons and a fix for the earlier loading gap are not claimed.
 The signed-out emulator can still encounter YouTube’s bot-verification prompt.
 Google’s sign-in form opens in-app; completion has not been tested.
 See [verification and remaining checks](docs/VERIFICATION.md).
 
 Normal mode has no native toolbar: use YouTube’s Home navigation and pull down
 from the top of the page to reload. A Reload button appears for page/browser
-errors. A small speed chip sits near the video’s upper-right corner on open
+errors. A circular arrow follows the pull, turns teal and gives haptic feedback
+at the release threshold, then spins until loading finishes and animates back.
+A small speed chip sits near the video’s upper-right corner on open
 videos, follows playback controls, and fades during playback. Ad acceleration
 is always on; routine status banners remain hidden.
 Fullscreen overrides portrait lock and restores the previous orientation policy
 on exit. Normal and fullscreen selectors offer 0.25× through 4×, including
-2.25×. Each new video starts at 1×; the current selection survives ads, rotation, and
+2.25×. Each new normal video starts at 1× once; the current selection survives ads, rotation, and
 background/resume. Selecting during an ad changes the rate restored afterward.
+YouTube menu selections also become the remembered speed. Native hold-to-2×
+temporarily yields to YouTube and restores the remembered selection after release.
+Shorts and homepage previews receive no default content-speed writes; Shorts have
+no app selector and YouTube owns their content speed. Ad restoration still applies.
 YouTube provides its own search suggestions and history; the app adds no separate
 search history. HTTPS links remain in the app, including sign-in and help pages.
 New-window links open in the same tab. The extension runs only on exact HTTPS
@@ -91,27 +99,32 @@ an actual ad. Verify the mobile ad signal, measured media time and shorter ad
 wall-clock duration, then speed restoration. A successful rate assignment or
 controlled fixture does not establish real YouTube ad acceleration.
 
-## Status and backlog
+## Current status
 
-Current app/extension: **0.4.1**, Android versionCode **7**.
+Current app/extension: **0.4.3**, Android versionCode **9**.
 
 | Item | Status |
 |---|---|
 | Both landscape fullscreen directions; restore prior orientation | Implemented; earlier phone checks passed |
-| Per-video speed, ad/lifecycle safeguards, including 2.25× | Implemented; controlled emulator checks passed |
-| No normal toolbar; top-only refresh, error Reload, video speed chip | Implemented; physical-phone/live layout checks pending |
+| Per-video speed, ad/lifecycle safeguards, including 2.25× | Implemented; remembered speed is separate from temporary native holds |
+| No normal toolbar; top-only refresh, error Reload, video speed chip | User confirms original behavior; refresh animation polish passes emulator checks |
 | Native search history | Dropped; YouTube owns search/history |
-| Video bookmarks | Deferred; no additional feature is queued |
+| Cooperative content-speed ownership | Mobile-overlay recognition corrected in 0.4.3; see Verification for live results |
+
+Upcoming work is listed separately in [BACKLOG.md](BACKLOG.md).
 
 Keep mobile YouTube and GeckoView. Automatic Skip, desktop mode, release
 publishing and further ad-delay investigation are outside the current scope.
+Older-Android compatibility and destructive recovery acceptance are not required
+for this personal app; existing platform safeguards remain in place.
 
 ## Documentation
 
+- [Backlog](BACKLOG.md): upcoming work and outstanding acceptance, in suggested order.
 - [Privacy](PRIVACY.md): data, permissions and sharing the APK.
 - [Architecture](docs/BROWSER_ARCHITECTURE.md): ownership, trust boundaries and lifecycle.
 - [Verification](docs/VERIFICATION.md): current proof and remaining acceptance.
 - [History](docs/HISTORY.md): earlier engine/phone results and preserved ad-transition findings.
 
-Keep setup, user behavior and backlog here; update current proof in Verification
+Keep setup and user behavior here, upcoming work in Backlog, and current proof in Verification
 and append dated historical findings to History when they are superseded.
