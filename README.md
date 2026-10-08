@@ -5,11 +5,12 @@ WebExtension that temporarily accelerates detected YouTube ads. Playback and
 acceleration run inside the same app and browser profile. Firefox does not need
 to be installed. This replaces the Android WebView prototype in commit `a117335`.
 
-**Experimental: real YouTube ad acceleration is not yet established.** The
-unsigned-in emulator session still encounters YouTube's bot-verification prompt.
-The Google sign-in form opens inside this browser, but completing sign-in and
-playing YouTube videos afterward have not been tested. Changing engines does not
-guarantee that YouTube will allow playback. See [docs/VERIFICATION.md](docs/VERIFICATION.md).
+**Experimental:** 0.4.1 passes controlled emulator acceptance. Earlier phone
+captures observed accelerated ads, but a repeatable improvement in live ad
+wall-clock duration and a fix for the subsequent loading gap remain unverified.
+The signed-out emulator can still encounter YouTube’s bot-verification prompt.
+Google’s sign-in form opens in-app; completion has not been tested.
+See [verification and remaining checks](docs/VERIFICATION.md).
 
 Normal mode has no native toolbar: use YouTube’s Home navigation and pull down
 from the top of the page to reload. A Reload button appears for page/browser
@@ -17,8 +18,8 @@ errors. A small speed chip sits near the video’s upper-right corner on open
 videos, follows playback controls, and fades during playback. Ad acceleration
 is always on; routine status banners remain hidden.
 Fullscreen overrides portrait lock and restores the previous orientation policy
-on exit. Normal and fullscreen selectors offer 0.25× through 4×, including 2.25×. Each new
-video starts at 1×; the current selection survives ads, rotation, and
+on exit. Normal and fullscreen selectors offer 0.25× through 4×, including
+2.25×. Each new video starts at 1×; the current selection survives ads, rotation, and
 background/resume. Selecting during an ad changes the rate restored afterward.
 YouTube provides its own search suggestions and history; the app adds no separate
 search history. HTTPS links remain in the app, including sign-in and help pages.
@@ -44,9 +45,8 @@ node --test test/*.test.cjs
 
 The engine version is pinned in `gradle/libs.versions.toml`. The first build needs
 network access to Mozilla's Maven repository and the transitive dependencies.
-Gradle packages `src/manifest.json`, `src/gecko-host.js`, and the two shared
-controller scripts under `assets/accelerator/`. Edit those source files, not the
-generated assets. When changing a bundled extension, increase its manifest
+Gradle packages the manifest and four runtime scripts from `src/` under
+`assets/accelerator/`. Edit those source files, not generated assets. When changing a bundled extension, increase its manifest
 version: GeckoView persists it and `ensureBuiltIn` replaces it only when the
 version changes.
 
@@ -59,8 +59,9 @@ adb -s <device-id> shell am start -n lab.youtube.accelerator/.MainActivity
 ```
 
 The ARM64 debug APK is approximately 188 MiB because it includes the browser
-engine. APK updates retain the browser profile. Retired prototype preferences are removed. GeckoView creates its
-own browser profile; old WebView and external-browser cookies are not imported.
+engine. APK updates retain the browser profile and remove retired prototype
+preferences. GeckoView creates its own browser profile; old WebView and
+external-browser cookies are not imported.
 Release signing and distribution remain future work.
 
 ## Browser acceptance
@@ -82,18 +83,35 @@ it temporarily changes rotation settings and backgrounds the app. The fixture an
 test harness are not packaged in the APK.
 Emulator recording and accessibility automation have repeatability limits;
 see the verification notes before interpreting a harness failure or success.
-The harness temporarily locks portrait orientation and saves/restores the app’s
-both device rotation settings.
-Current 0.4.1 results and remaining live checks are in
-[docs/PROTOTYPE_UX_VERIFICATION.md](docs/PROTOTYPE_UX_VERIFICATION.md).
+The harness saves/restores both device rotation settings. Current results and
+remaining live checks are in [docs/VERIFICATION.md](docs/VERIFICATION.md).
 
 For live acceptance, use a non-Premium session that permits playback and observe
 an actual ad. Verify the mobile ad signal, measured media time and shorter ad
 wall-clock duration, then speed restoration. A successful rate assignment or
 controlled fixture does not establish real YouTube ad acceleration.
 
-Read [PRIVACY.md](PRIVACY.md) before sharing the APK,
-[docs/BROWSER_ARCHITECTURE.md](docs/BROWSER_ARCHITECTURE.md) for integration details,
-and [docs/ANDROID_APP_HANDOVER.md](docs/ANDROID_APP_HANDOVER.md) for the original
-handover. Historical WebView results are retained separately in
-[docs/WEBVIEW_VERIFICATION.md](docs/WEBVIEW_VERIFICATION.md).
+## Status and backlog
+
+Current app/extension: **0.4.1**, Android versionCode **7**.
+
+| Item | Status |
+|---|---|
+| Both landscape fullscreen directions; restore prior orientation | Implemented; earlier phone checks passed |
+| Per-video speed, ad/lifecycle safeguards, including 2.25× | Implemented; controlled emulator checks passed |
+| No normal toolbar; top-only refresh, error Reload, video speed chip | Implemented; physical-phone/live layout checks pending |
+| Native search history | Dropped; YouTube owns search/history |
+| Video bookmarks | Deferred; no additional feature is queued |
+
+Keep mobile YouTube and GeckoView. Automatic Skip, desktop mode, release
+publishing and further ad-delay investigation are outside the current scope.
+
+## Documentation
+
+- [Privacy](PRIVACY.md): data, permissions and sharing the APK.
+- [Architecture](docs/BROWSER_ARCHITECTURE.md): ownership, trust boundaries and lifecycle.
+- [Verification](docs/VERIFICATION.md): current proof and remaining acceptance.
+- [History](docs/HISTORY.md): earlier engine/phone results and preserved ad-transition findings.
+
+Keep setup, user behavior and backlog here; update current proof in Verification
+and append dated historical findings to History when they are superseded.
