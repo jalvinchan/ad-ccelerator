@@ -5,17 +5,19 @@ const vm = require("node:vm");
 const core = readFileSync(require.resolve("../src/ad-session.js"), "utf8");
 const controller = readFileSync(require.resolve("../src/page-controller.js"), "utf8");
 
-async function page({ stored = true, rate = 2 } = {}) {
+async function page({ stored = true, rate = 2, url = "https://m.youtube.com/watch?v=first" } = {}) {
   const timers = new Map();
   const intervals = new Map();
   const navigation = new Map();
   const media = new Map();
   let observe;
   let nextId = 0;
-  const rect = { width: 640, height: 360 };
+  let clock = 313;
+  const rect = { width: 640, height: 360, left: 0, top: 0, right: 640, bottom: 360 };
   const player = {
     isConnected: true, nodeType: 1, ad: false,
     classList: { contains: name => name === "ad-showing" && player.ad },
+    contains: target => target === video,
     querySelector: () => video,
     querySelectorAll: () => buttons,
   };
@@ -34,8 +36,8 @@ async function page({ stored = true, rate = 2 } = {}) {
   const buttons = [button];
   const candidates = [player];
   const sandbox = vm.createContext({
-    URL, location: { href: "https://m.youtube.com/watch?v=first" },
-    performance: { now: () => 313 }, Date,
+    URL, location: { href: url },
+    performance: { now: () => clock }, Date,
     console: { info() {} },
     getComputedStyle: element => ({ display: element.display ?? "block", visibility: "visible", opacity: "1" }),
     setTimeout(callback) { timers.set(++nextId, callback); return nextId; },
@@ -53,10 +55,14 @@ async function page({ stored = true, rate = 2 } = {}) {
   vm.runInContext(core, sandbox);
   vm.runInContext(controller, sandbox);
   sandbox.YouTubeAdAccelerator.setEnabled(stored);
-  if (rate !== 1) sandbox.YouTubeAdAccelerator.setContentRate(rate, sandbox.YouTubeAdAccelerator.getStatus().videoContext);
+  if (rate !== 1 && !url.includes("/shorts/") && !url.endsWith(".com/")) sandbox.YouTubeAdAccelerator.setContentRate(rate, sandbox.YouTubeAdAccelerator.getStatus().videoContext);
   await Promise.resolve();
   return {
     video, player, button, buttons, candidates, sandbox, timers, intervals,
+    advance(ms) { clock += ms; },
+    event(type, values = {}) { media.get(type)({ target: video, isPrimary: true, button: 0,
+      pointerId: 1, clientX: 100, clientY: 100, ...values }); },
+    external(rate) { video.playbackRate = rate; media.get("ratechange")({target: video}); },
     scan() { observe(); const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(callback => callback()); },
     speed(value, context = sandbox.YouTubeAdAccelerator.getStatus().videoContext) { return sandbox.YouTubeAdAccelerator.setContentRate(value, context); },
     change(value) { sandbox.YouTubeAdAccelerator.setEnabled(value); },
@@ -291,4 +297,169 @@ test("rejected content rates are reported, including an accepted ad-time choice 
   assert.notEqual(current.status().contentAppliedRate, 2.25);
   assert.equal(current.speed(1.25).accepted, true);
   assert.equal(current.status().contentError, null);
+});
+
+for (const baseline of [1, 1.5, 2, 2.25]) {
+  for (const release of ["pointerup", "pointercancel"]) {
+    test(`native hold from ${baseline}× yields through polling and restores on ${release}`, async () => {
+      const current = await page({rate: baseline});
+      current.event("ratechange"); // Flush the app-written rate event.
+      current.event("pointerdown");
+      current.advance(600);
+      if (baseline !== 2) current.external(2);
+      for (let i = 0; i < 5; i++) {
+        assert.equal(current.status().contentRate, baseline);
+        assert.equal(current.status().contentAppliedRate, null);
+        assert.equal(current.video.playbackRate, 2);
+      }
+      current.event(release);
+      current.external(1); // YouTube settles at its own default before our bounded restoration.
+      assert.equal(current.status().contentRate, baseline);
+      current.scan();
+      assert.equal(current.video.playbackRate, baseline);
+      assert.equal(current.status().contentAppliedRate, baseline);
+    });
+  }
+}
+
+test("native menu choices are remembered without polling writes; rejection never retries", async () => {
+  const current = await page({rate: 1});
+  current.external(1.1);
+  for (let i = 0; i < 5; i++) assert.equal(current.status().contentRate, 1.1);
+  current.player.ad = true;
+  current.scan();
+  current.player.ad = false;
+  current.scan();
+  assert.equal(current.video.playbackRate, 1.1);
+  let writes = 0;
+  Object.defineProperty(current.video, "playbackRate", { get: () => 1.1,
+    set() { writes++; throw new Error("unsupported"); } });
+  assert.equal(current.speed(2.25).error, "rate-rejected");
+  for (let i = 0; i < 5; i++) current.status();
+  assert.equal(writes, 1);
+});
+
+for (const interruption of ["ad", "navigation", "replacement", "background"]) {
+  test(`pending hold restoration is invalidated by ${interruption}`, async () => {
+    const current = await page({rate: 1.5});
+    current.event("ratechange");
+    current.event("pointerdown");
+    current.external(2);
+    current.event("pointerup");
+    const stale = [...current.timers.values()].at(-1);
+    if (interruption === "ad") { current.player.ad = true; current.status(); }
+    if (interruption === "navigation") {
+      current.navigation("yt-navigate-start");
+      current.sandbox.location.href = "https://m.youtube.com/watch?v=next";
+      current.navigation("yt-navigate-finish"); current.status();
+    }
+    if (interruption === "replacement") {
+      current.player.querySelector = () => ({...current.video, playbackRate: 1}); current.status();
+    }
+    if (interruption === "background") current.sandbox.YouTubeAdAccelerator.setSuspended(true);
+    const before = current.video.playbackRate;
+    stale(); // Even an already queued callback must be harmless.
+    assert.equal(current.video.playbackRate, before);
+    if (interruption === "navigation") assert.equal(before, 1);
+  });
+}
+
+test("Shorts and previews get no default writes; Shorts reject commands and restore native speed after ads", async () => {
+  for (const url of ["https://m.youtube.com/shorts/first", "https://m.youtube.com/"]) {
+    const current = await page({url});
+    assert.equal(current.video.playbackRate, 2);
+    assert.equal(current.status().contentSpeedAvailable, false);
+    assert.equal(current.speed(3).accepted, false);
+    current.external(1.5);
+    current.event("pointerdown");
+    current.external(2);
+    current.event("pointercancel");
+    current.external(1.5); // Native Shorts restoration owns the write.
+    current.scan();
+    assert.equal(current.video.playbackRate, 1.5);
+    current.event("ratechange");
+    current.event("pointerdown");
+    current.event("pointermove", {clientY: 200});
+    current.event("pointerup");
+    assert.equal(current.timers.size, 0);
+    current.player.ad = true; current.scan();
+    assert.equal(current.video.playbackRate, 16);
+    current.player.ad = false; current.scan();
+    assert.equal(current.video.playbackRate, 1.5);
+  }
+});
+
+test("short contacts, swipes and controls do not identify holds", async () => {
+  const current = await page();
+  current.event("ratechange");
+  current.event("pointerdown"); current.advance(100); current.event("pointerup");
+  current.external(1.25);
+  assert.equal(current.status().contentRate, 1.25);
+  current.event("pointerdown", {target: {closest: () => ({})}});
+  current.external(2);
+  assert.equal(current.status().contentRate, 2);
+  current.event("pointerdown"); current.event("pointermove", {clientX: 150});
+  current.advance(600); current.event("pointerup");
+  assert.notEqual(current.status().contentAppliedRate, null);
+});
+
+test("a newer app selection during a hold wins over native restoration", async () => {
+  const current = await page({rate: 1.5});
+  current.event("ratechange"); current.event("pointerdown"); current.external(2);
+  assert.equal(current.speed(3).pending, true);
+  assert.equal(current.video.playbackRate, 2);
+  current.event("pointerup"); current.external(1.5); current.scan();
+  assert.equal(current.video.playbackRate, 3);
+  assert.equal(current.status().contentRate, 3);
+});
+
+test("Shorts hold/restoration and stable selection never write content speed", async () => {
+  const current = await page({url: "https://m.youtube.com/shorts/first"});
+  let actual = 1.5;
+  let writes = 0;
+  Object.defineProperty(current.video, "playbackRate", {get: () => actual, set(value) {writes++; actual = value;}});
+  current.event("ratechange");
+  current.event("pointerdown"); actual = 2; current.event("ratechange");
+  current.advance(600); current.status(); current.event("pointerup");
+  actual = 1.5; current.event("ratechange"); current.scan();
+  assert.equal(writes, 0);
+  assert.equal(current.status().contentRate, 1.5);
+  assert.equal(current.speed(3).accepted, false);
+  current.player.ad = true; current.scan();
+  current.player.ad = false; current.scan();
+  assert.equal(actual, 1.5);
+  assert.equal(writes, 2); // One acceleration, one ad restoration.
+});
+
+for (const baseline of [1.5, 2, 2.25]) {
+  test(`mobile sibling hold surface restores ${baseline}× without owning the gesture`, async () => {
+    const current = await page({rate: baseline});
+    const container = {};
+    current.player.closest = selector => selector === ".player-container" ? container : null;
+    const overlay = {closest: selector => selector === ".player-container" ? container : null};
+    current.event("ratechange");
+    current.event("pointerdown", {target: overlay});
+    current.advance(600);
+    if (baseline !== 2) current.external(2);
+    assert.equal(current.status().contentRate, baseline);
+    assert.equal(current.status().contentAppliedRate, null);
+    current.event("pointerup", {target: overlay});
+    current.external(1); current.scan();
+    assert.equal(current.video.playbackRate, baseline);
+  });
+}
+
+test("sibling gesture recognition excludes native controls, unrelated overlays and outside touches", async () => {
+  for (const kind of ["control", "unrelated", "outside"]) {
+    const current = await page({rate: 1.5});
+    const container = {};
+    current.player.closest = () => container;
+    const target = {closest: selector => selector === ".player-container"
+      ? kind === "unrelated" ? {} : container : kind === "control" ? {} : null};
+    current.event("ratechange");
+    current.event("pointerdown", {target, clientX: kind === "outside" ? 700 : 100});
+    current.external(2);
+    assert.equal(current.status().contentRate, 2);
+    assert.equal(current.status().contentAppliedRate, 2);
+  }
 });

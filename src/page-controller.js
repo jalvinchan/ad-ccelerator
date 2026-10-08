@@ -15,6 +15,12 @@
   let contentRate = 1;
   let contentError = null;
   let failedVideo = null;
+  let needsContent = true;
+  let wasAd = false;
+  let gesture = null;
+  let settling = null;
+  const writtenRates = new WeakMap();
+  const validRate = rate => Number.isFinite(rate) && rate > 0 && rate <= 16;
   const events = [];
   const now = () => performance.now();
 
@@ -44,30 +50,59 @@
     return path ? `video:${path[1]}` : url.pathname;
   }
 
+  function shorts() {
+    return /^\/shorts\//.test(new URL(location.href).pathname)
+      || Boolean(selected?.video.closest?.("ytd-reel-video-renderer, ytm-reel-item-renderer"));
+  }
+  function normalVideo() {
+    const url = new URL(location.href);
+    return !shorts() && ((url.pathname === "/watch" && url.searchParams.has("v"))
+      || /^\/(?:live|embed)\/[^/]+/.test(url.pathname));
+  }
+  function invalidateGesture() {
+    gesture = null;
+    if (settling !== null) clearTimeout(settling);
+    settling = null;
+  }
+  function holding() {
+    if (gesture && !gesture.moved && gesture.baseline === 2 && now() - gesture.started >= 500)
+      gesture.hold = true;
+    return Boolean(gesture?.hold);
+  }
+
   function end(reason) {
     const previous = session;
     session = null;
     player = null;
     if (watchdog !== null) clearInterval(watchdog);
     watchdog = null;
-    previous?.finish(reason);
+    if (previous) {
+      writtenRates.set(previous.video, previous.baseline);
+      previous.finish(reason);
+    }
   }
 
   function refreshContext() {
     const key = pageKey();
     if (key === videoKey) return;
+    invalidateGesture();
     end("video-changed");
     videoKey = key;
     generation++;
     contentRate = 1;
     contentError = null;
     failedVideo = null;
+    needsContent = true;
+    wasAd = false;
   }
 
   function applyContent(video) {
     if (failedVideo === video) return false;
     try {
-      if (video.playbackRate !== contentRate) video.playbackRate = contentRate;
+      if (video.playbackRate !== contentRate) {
+        writtenRates.set(video, contentRate);
+        video.playbackRate = contentRate;
+      }
       if (video.playbackRate !== contentRate) throw new Error("Player did not accept the content rate");
       contentError = null;
       return true;
@@ -83,7 +118,9 @@
     if (scheduled !== null) clearTimeout(scheduled);
     scheduled = null;
     refreshContext();
-    if (suspended || appSuspended) { end("app-paused"); selected = null; return; }
+    if (suspended || appSuspended || document.hidden) {
+      invalidateGesture(); end("app-paused"); selected = null; needsContent = true; return;
+    }
     const candidates = [...document.querySelectorAll(".html5-video-player")]
       .map(element => ({ player: element, video: element.querySelector("video") }))
       .filter(item => visible(item.video))
@@ -91,13 +128,27 @@
         const area = item => { const rect = item.video.getBoundingClientRect(); return rect.width * rect.height; };
         return area(b) - area(a);
       });
-    selected = candidates[0] ?? null;
+    const next = candidates[0] ?? null;
+    if (next?.video !== selected?.video || next?.player !== selected?.player) {
+      invalidateGesture();
+      needsContent = true;
+      failedVideo = null;
+    }
+    selected = next;
     const ad = selected?.player.classList.contains("ad-showing");
     if (session && (!enabled || !ad || selected.player !== player || selected.video !== session.video)) {
       end(!enabled ? "disabled" : ad ? "player-replaced" : "ad-state-cleared");
     }
     if (!selected) return;
-    if (!ad) { applyContent(selected.video); return; }
+    if (ad) invalidateGesture();
+    if (!ad) {
+      if (wasAd || (needsContent && normalVideo())) applyContent(selected.video);
+      else if (needsContent && validRate(selected.video.playbackRate)) contentRate = selected.video.playbackRate;
+      needsContent = false;
+      wasAd = false;
+      return;
+    }
+    wasAd = true;
     // Content selection remains independent of the acceleration toggle and ad media.
     if (!enabled) return;
     if (!session) {
@@ -118,13 +169,72 @@
     childList: true, subtree: true, attributes: true,
     attributeFilter: ["class", "hidden", "src"],
   });
-  for (const event of ["loadedmetadata", "ratechange", "play", "emptied"])
+  document.addEventListener("ratechange", event => {
+    const video = event.target;
+    if (video !== selected?.video) return;
+    const rate = video.playbackRate;
+    if (writtenRates.has(video)) {
+      const expected = writtenRates.get(video);
+      writtenRates.delete(video);
+      if (rate === expected) return;
+    }
+    if (suspended || appSuspended || document.hidden || session
+      || selected.player.classList.contains("ad-showing") || wasAd || needsContent) { schedule(); return; }
+    if (gesture && !gesture.moved && rate === 2) gesture.hold = true;
+    if (!holding() && validRate(rate)) {
+      contentRate = rate;
+      contentError = null;
+      failedVideo = null;
+    }
+    schedule();
+  }, true);
+  for (const event of ["loadedmetadata", "play", "emptied"])
     document.addEventListener(event, () => {
       if (event === "loadedmetadata") failedVideo = null;
       schedule();
     }, true);
+
+  // Observe YouTube's gesture; never capture pointers or suppress its handlers.
+  document.addEventListener("pointerdown", event => {
+    reconcile();
+    if (gesture || !selected || event.isPrimary === false || event.button !== 0
+      || selected.player.classList.contains("ad-showing")) return;
+    const rect = selected.video.getBoundingClientRect();
+    // Mobile YouTube mounts its native controls beside, rather than inside, the player.
+    const container = selected.player.closest?.(".player-container");
+    const onPlayer = selected.player.contains(event.target)
+      || (container && event.target.closest?.(".player-container") === container);
+    if (event.clientX < rect.left || event.clientX > rect.right
+      || event.clientY < rect.top || event.clientY > rect.bottom
+      || !onPlayer
+      || event.target.closest?.("button, a, input, select, textarea, [role=button], [role=slider], [role=menuitem], .ytp-chrome-controls, .ytp-settings-menu")) return;
+    gesture = { id: event.pointerId, video: selected.video, baseline: contentRate,
+      started: now(), x: event.clientX, y: event.clientY, moved: false, hold: false };
+  }, { capture: true, passive: true });
+  document.addEventListener("pointermove", event => {
+    if (gesture?.id === event.pointerId && Math.hypot(event.clientX - gesture.x, event.clientY - gesture.y) > 12)
+      gesture.moved = true;
+  }, { capture: true, passive: true });
+  for (const event of ["pointerup", "pointercancel"])
+    document.addEventListener(event, value => {
+      if (gesture?.id !== value.pointerId || settling !== null) return;
+      if (!holding()) { invalidateGesture(); return; }
+      const pending = gesture;
+      settling = setTimeout(() => {
+        if (gesture !== pending) return;
+        settling = null;
+        reconcile();
+        if (gesture !== pending || selected?.video !== pending.video) return;
+        gesture = null;
+        if (normalVideo()) applyContent(pending.video);
+        else if (validRate(pending.video.playbackRate)
+          && (pending.video.playbackRate !== 2 || pending.baseline === 2))
+          contentRate = pending.video.playbackRate;
+      }, 250);
+    }, { capture: true, passive: true });
+  document.addEventListener("visibilitychange", () => { reconcile(); }, true);
   for (const event of ["yt-navigate-start", "pagehide"]) {
-    globalThis.addEventListener(event, () => { suspended = true; end("navigation"); selected = null; });
+    globalThis.addEventListener(event, () => { suspended = true; invalidateGesture(); end("navigation"); selected = null; needsContent = true; });
   }
   for (const event of ["yt-navigate-finish", "pageshow", "popstate"]) {
     globalThis.addEventListener(event, () => { suspended = false; schedule(); });
@@ -136,12 +246,19 @@
       reconcile(); // Reject commands that raced URL navigation or a hidden/removed player.
       if (!rates.includes(rate)) return { accepted: false, error: "invalid-rate" };
       if (!context() || expectedContext !== context()) return { accepted: false, error: "stale-context" };
+      if (shorts() || !normalVideo()) return { accepted: false, error: "unavailable" };
+      const temporary = holding();
+      if (!temporary) invalidateGesture();
       const previous = contentRate;
       contentRate = rate;
       contentError = null;
       failedVideo = null;
       const ad = selected.player.classList.contains("ad-showing");
       if (session) session.baseline = rate;
+      if (temporary) {
+        gesture.baseline = rate;
+        return { accepted: true, pending: true };
+      }
       if (!ad && !applyContent(selected.video)) {
         contentRate = previous;
         return { accepted: false, error: "rate-rejected" };
@@ -152,8 +269,8 @@
     getStatus() {
       reconcile();
       return { enabled, adActive: Boolean(selected?.player.classList.contains("ad-showing")),
-        rate: session?.video.playbackRate ?? null, contentRate,
-        contentAppliedRate: selected && !selected.player.classList.contains("ad-showing")
+        rate: session?.video.playbackRate ?? null, contentRate, contentSpeedAvailable: normalVideo(),
+        contentAppliedRate: selected && !holding() && !selected.player.classList.contains("ad-showing")
           ? selected.video.playbackRate : null,
         contentError, videoContext: context(), events };
     },

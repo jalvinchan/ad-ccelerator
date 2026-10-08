@@ -29,9 +29,9 @@
     if (!port) return;
     const state = controller.getStatus();
     controls.update(state, !paused && !document.hidden);
-    const { enabled, adActive, rate, contentRate, contentAppliedRate, contentError, videoContext } = state;
+    const { enabled, adActive, rate, contentRate, contentAppliedRate, contentError, videoContext, contentSpeedAvailable } = state;
     port.postMessage({ type: "status", enabled, adActive, rate, contentRate,
-      contentAppliedRate, contentError, videoContext, url: location.href, revision, paused });
+      contentAppliedRate, contentError, videoContext, contentSpeedAvailable, url: location.href, revision, paused });
   }
 
   function disconnect() {

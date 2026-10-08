@@ -82,3 +82,13 @@ test('chip hides outside an active visible video and reports rejected speed acce
   current.tick(0);
   assert.equal(current.host.style.display, 'none');
 });
+
+test('Shorts have no speed chip and holds display the remembered selection', () => {
+  const current = controls();
+  current.state.contentAppliedRate = null;
+  current.tick(0);
+  assert.equal(current.button.textContent, '2.25×');
+  current.location.href = 'https://m.youtube.com/shorts/fixture';
+  current.tick(0);
+  assert.equal(current.host.style.display, 'none');
+});

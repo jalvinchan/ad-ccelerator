@@ -27,8 +27,8 @@
       const selected = controller.getPlayer();
       const url = new URL(location.href);
       const videoOpen = (url.pathname === "/watch" && url.searchParams.has("v"))
-        || /^\/(?:shorts|live|embed)\/[^/]+/.test(url.pathname);
-      if (!videoOpen || !active || !state?.videoContext || !selected || document.hidden || document.fullscreenElement) {
+        || /^\/(?:live|embed)\/[^/]+/.test(url.pathname);
+      if (selected?.video.closest?.("ytd-reel-video-renderer, ytm-reel-item-renderer") || !videoOpen || !active || !state?.videoContext || !selected || document.hidden || document.fullscreenElement) {
         hide(); return;
       }
       const { video, player } = selected;

@@ -60,7 +60,7 @@ public final class MainActivity extends Activity {
     private int revision;
     private int previousOrientation;
     private Button reloadButton;
-    private TextView refreshHint;
+    private RefreshIndicator refreshIndicator;
     private float scrollY;
     private boolean scrollKnown;
     private boolean pulling;
@@ -69,6 +69,7 @@ public final class MainActivity extends Activity {
     private Button fullscreenSpeedButton;
     private String videoContext;
     private double contentRate = 1;
+    private boolean contentSpeedAvailable = false;
     private int commandId;
     private int pendingCommand;
     private AlertDialog speedSelector;
@@ -179,19 +180,24 @@ public final class MainActivity extends Activity {
         web.setOnTouchListener((view, event) -> {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
-                    pulling = pageAtTop() && !fullscreen && !paused && !loadFailed;
+                    pulling = pageAtTop() && !fullscreen && !paused && !loadFailed
+                        && !refreshIndicator.isLoading();
                     pullX = event.getX();
                     pullY = event.getY();
                     break;
                 case MotionEvent.ACTION_MOVE:
                     if (event.getPointerCount() != 1 || !pageAtTop()
                         || Math.abs(event.getX() - pullX) > dp(32) || event.getY() < pullY) pulling = false;
-                    refreshHint.setVisibility(pulling && event.getY() - pullY >= dp(96) ? View.VISIBLE : View.GONE);
+                    if (pulling) refreshIndicator.drag(event.getY() - pullY);
+                    else refreshIndicator.release();
                     break;
                 case MotionEvent.ACTION_UP:
                     boolean refresh = pulling && event.getY() - pullY >= dp(96);
-                    cancelPull();
-                    if (refresh) handler.post(this::reloadPage);
+                    pulling = false;
+                    if (refresh) {
+                        refreshIndicator.startLoading();
+                        handler.post(this::reloadPage);
+                    } else refreshIndicator.release();
                     break;
                 case MotionEvent.ACTION_POINTER_DOWN:
                 case MotionEvent.ACTION_CANCEL:
@@ -201,13 +207,8 @@ public final class MainActivity extends Activity {
             }
             return false; // Gecko keeps ownership of scrolling and player gestures.
         });
-        refreshHint = new TextView(this);
-        refreshHint.setText(R.string.release_to_reload);
-        refreshHint.setTextColor(Color.WHITE);
-        refreshHint.setBackgroundColor(Color.DKGRAY);
-        refreshHint.setPadding(dp(16), dp(8), dp(16), dp(8));
-        root.addView(refreshHint, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.CENTER_HORIZONTAL));
-        refreshHint.setVisibility(View.GONE);
+        refreshIndicator = new RefreshIndicator(this);
+        root.addView(refreshIndicator, new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
         browser.setFocusableInTouchMode(true);
         browser.requestFocus();
         fullscreenSpeedButton = new Button(this);
@@ -227,12 +228,15 @@ public final class MainActivity extends Activity {
 
     private void cancelPull() {
         pulling = false;
-        refreshHint.setVisibility(View.GONE);
+        refreshIndicator.release();
     }
 
     private void reloadPage() {
         cancelPull();
-        if (!extensionReady || paused || fullscreen) return;
+        if (!extensionReady || paused || fullscreen) {
+            refreshIndicator.finish();
+            return;
+        }
         if (loadFailed) navigate(UrlPolicy.browsableHttps(currentUrl) ? currentUrl : HOME);
         else session.reload();
     }
@@ -284,6 +288,7 @@ public final class MainActivity extends Activity {
                 status.setVisibility(View.GONE);
             }
             @Override public void onPageStop(GeckoSession source, boolean success) {
+                refreshIndicator.finish();
                 loadFailed = !success;
                 if (success) {
                     status.setVisibility(View.GONE);
@@ -344,7 +349,7 @@ public final class MainActivity extends Activity {
         Object type = state.opt("type");
         if ("open-speed-selector".equals(type)) {
             if (!paused && !loadFailed && !fullscreen && currentDocument(state)
-                && videoContextEquals(state.opt("videoContext")) && speedSelector == null) chooseSpeed();
+                && contentSpeedAvailable && videoContextEquals(state.opt("videoContext")) && speedSelector == null) chooseSpeed();
             return;
         }
         if ("speed-result".equals(type)) {
@@ -356,8 +361,9 @@ public final class MainActivity extends Activity {
             return;
         }
         if (!"status".equals(type) || !(state.opt("paused") instanceof Boolean)
+            || !(state.opt("contentSpeedAvailable") instanceof Boolean)
             || !(state.opt("enabled") instanceof Boolean) || !(state.opt("adActive") instanceof Boolean)
-            || !NativeProtocol.contentRate(state.opt("contentRate"))
+            || !(state.opt("contentRate") instanceof Number) || !NativeProtocol.optionalRate(state.opt("contentRate"))
             || !optionalRate(state, "rate") || !optionalRate(state, "contentAppliedRate")
             || !state.has("videoContext") || !state.has("contentError")
             || !(state.isNull("videoContext") || NativeProtocol.context(state.opt("videoContext")))
@@ -374,6 +380,8 @@ public final class MainActivity extends Activity {
         String context = state.isNull("videoContext") ? null : (String) state.opt("videoContext");
         if (videoContext != null && !videoContext.equals(context) && speedSelector != null) speedSelector.dismiss();
         videoContext = context;
+        contentSpeedAvailable = Boolean.TRUE.equals(state.opt("contentSpeedAvailable"));
+        if (!contentSpeedAvailable && speedSelector != null) speedSelector.dismiss();
         contentRate = ((Number) state.opt("contentRate")).doubleValue();
         boolean rejected = !state.isNull("contentError") || (!state.isNull("contentAppliedRate")
             && ((Number) state.opt("contentAppliedRate")).doubleValue() != contentRate);
@@ -395,6 +403,7 @@ public final class MainActivity extends Activity {
 
     private void resetContentControls() {
         videoContext = null;
+        contentSpeedAvailable = false;
         contentRate = 1;
         pendingCommand = 0;
         if (speedSelector != null) speedSelector.dismiss();
@@ -405,7 +414,8 @@ public final class MainActivity extends Activity {
         String label = rejected ? getString(R.string.speed_unavailable) : getString(R.string.content_speed, rateLabel(contentRate));
         fullscreenSpeedButton.setText(rejected ? "! ×" : rateLabel(contentRate) + "×");
         fullscreenSpeedButton.setContentDescription(label);
-        fullscreenSpeedButton.setEnabled(videoContext != null && !paused);
+        fullscreenSpeedButton.setVisibility(fullscreen && contentSpeedAvailable ? View.VISIBLE : View.GONE);
+        fullscreenSpeedButton.setEnabled(videoContext != null && !paused && contentSpeedAvailable);
     }
 
     private static String rateLabel(double rate) {
@@ -413,7 +423,7 @@ public final class MainActivity extends Activity {
     }
 
     private void chooseSpeed() {
-        if (port == null || videoContext == null || paused) return;
+        if (port == null || videoContext == null || paused || !contentSpeedAvailable) return;
         String context = videoContext;
         WebExtension.Port connection = port;
         String[] labels = new String[NativeProtocol.CONTENT_RATES.length];
@@ -443,6 +453,8 @@ public final class MainActivity extends Activity {
     private void showSpeedError() { Toast.makeText(this, R.string.speed_rejected, Toast.LENGTH_SHORT).show(); }
 
     private void showError(int message) {
+        cancelPull();
+        refreshIndicator.finish();
         status.setText(message);
         status.setVisibility(View.VISIBLE);
         reloadButton.setVisibility(extensionReady ? View.VISIBLE : View.GONE);
@@ -452,11 +464,12 @@ public final class MainActivity extends Activity {
         if (fullscreen == active) return;
         fullscreen = active;
         cancelPull();
+        refreshIndicator.hide();
         if (active) {
             previousOrientation = getRequestedOrientation();
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
         } else setRequestedOrientation(previousOrientation);
-        fullscreenSpeedButton.setVisibility(active ? View.VISIBLE : View.GONE);
+        updateSpeedControls(false);
         controls.setVisibility(active ? View.GONE : View.VISIBLE);
         root.setBackgroundColor(active ? Color.BLACK : Color.TRANSPARENT);
         if (active) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
@@ -486,6 +499,7 @@ public final class MainActivity extends Activity {
     @Override protected void onPause() {
         paused = true;
         cancelPull();
+        refreshIndicator.hide();
         if (speedSelector != null) speedSelector.dismiss();
         updateSpeedControls(false);
         applyState();

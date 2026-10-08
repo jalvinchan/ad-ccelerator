@@ -2,6 +2,8 @@
     <string name="app_name">YouTube Ad Accelerator</string>
     <string name="reload">Reload</string>
     <string name="release_to_reload">Release to reload</string>
+    <string name="pull_to_reload">Pull to reload</string>
+    <string name="reloading">Reloading</string>
     <string name="https_required">Only HTTPS links without credentials or custom ports are supported.</string>
     <string name="browser_crashed">Browser stopped unexpectedly. Tap Reload to recover.</string>
     <string name="assets_unavailable">Unable to load the accelerator. Please reinstall the app.</string>

@@ -15,5 +15,8 @@ public class NativeProtocolTest {
         assertFalse(NativeProtocol.context("x".repeat(201)));
         assertTrue(NativeProtocol.optionalRate(null));
         assertFalse(NativeProtocol.optionalRate(-1));
+        for (double rate : new double[] {1.1, 2.5, 8, 16}) assertTrue(NativeProtocol.optionalRate(rate));
+        for (Object value : new Object[] {"2", true, 0, 16.1, Double.NaN, Double.POSITIVE_INFINITY})
+            assertFalse(NativeProtocol.optionalRate(value));
     }
 }
