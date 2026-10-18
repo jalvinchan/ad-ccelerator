@@ -18,4 +18,7 @@
     <string name="speed_mark_description">Set speed to %1$s</string>
     <string name="speed_unavailable">Speed unavailable</string>
     <string name="speed_rejected">Speed could not be applied. Try again on the current video.</string>
+    <string name="speed_chip_hint">Tip: long-press the speed chip to move it.</string>
+    <string name="reset_chip_position">Reset chip position</string>
+    <string name="chip_position_reset">Speed chip moved back to its default spot</string>
 </resources>

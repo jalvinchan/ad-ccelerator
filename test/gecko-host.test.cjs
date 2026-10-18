@@ -196,3 +196,19 @@ test('re-entrant control changes do not duplicate status reports', () => {
   assert.equal(statuses.length, before + 1);
   assert.equal(statuses.at(-1)[1].controlsVisible, true);
 });
+
+test('unchanged status is resent only as a five-second heartbeat', () => {
+  const current = host();
+  current.send(active(5));
+  const statuses = () => current.effects.filter(effect => effect[0] === 'report' && effect[1].type === 'status').length;
+  const tick = () => [...current.intervals.values()][0]();
+  const before = statuses();
+  for (let i = 0; i < 4; i++) tick();
+  assert.equal(statuses(), before);
+  tick();
+  assert.equal(statuses(), before + 1);
+  current.state.controls = true;
+  tick();
+  assert.equal(statuses(), before + 2); // A change is sent at once.
+});
+

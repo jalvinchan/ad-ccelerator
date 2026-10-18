@@ -12,7 +12,7 @@ import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
-/** Selector body: a 0.25×–4× slider with whole-speed marks, an exact readout and ±0.05× steps. */
+/** Selector body: a 0.25×–4× slider with whole-speed marks, an exact readout, ±0.05× steps and an optional note. */
 @SuppressLint("ViewConstructor") // Built only in code with its rate and listener.
 final class SpeedSlider extends LinearLayout {
     interface Listener { void onRate(double rate); }
@@ -27,7 +27,7 @@ final class SpeedSlider extends LinearLayout {
     private double applied;
     private boolean tracking;
 
-    SpeedSlider(Context context, double rate, Listener listener) {
+    SpeedSlider(Context context, double rate, CharSequence note, Listener listener) {
         super(context);
         this.listener = listener;
         applied = NativeProtocol.snapRate(rate);
@@ -86,6 +86,16 @@ final class SpeedSlider extends LinearLayout {
         });
         slider.setProgress(index(applied));
         render();
+        if (note != null) {
+            TextView hint = new TextView(context);
+            hint.setText(note);
+            hint.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            hint.setGravity(Gravity.CENTER);
+            hint.setAlpha(0.7f);
+            LayoutParams params = new LayoutParams(-1, -2);
+            params.topMargin = dp(12);
+            addView(hint, params);
+        }
     }
 
     private Button stepButton(int text, int description, int direction) {

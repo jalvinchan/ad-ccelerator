@@ -166,7 +166,17 @@
   }
   function context() { return selected ? `${documentId}:${generation}` : null; }
 
-  const observer = new MutationObserver(schedule);
+  // YouTube restyles the whole page constantly; only changes that can touch the chosen video matter.
+  // Anything missed here is still caught by the 1 s status poll, which calls reconcile().
+  function relevantMutation(record) {
+    if (record.type !== "attributes" || !selected) return true;
+    const target = record.target;
+    return target.nodeName === "VIDEO" || Boolean(target.classList?.contains("html5-video-player"))
+      || Boolean(target.contains?.(selected.player));
+  }
+  const observer = new MutationObserver(records => {
+    if (!records?.length || records.some(relevantMutation)) schedule();
+  });
   observer.observe(document.documentElement, {
     childList: true, subtree: true, attributes: true,
     attributeFilter: ["class", "hidden", "src"],

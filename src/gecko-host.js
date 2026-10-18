@@ -13,6 +13,8 @@
   let revision = -1;
   let lastCommandId = 0;
   let reporting = false;
+  let lastStatus = null;
+  let unchangedTicks = 0;
 
   const controls = globalThis.YouTubePlayerControls(controller, videoContext => {
     if (port && !paused && !document.hidden) port.postMessage({ type: "open-speed-selector",
@@ -28,7 +30,7 @@
     if (suspended) document.querySelectorAll("video").forEach(video => video.pause());
   }
 
-  function report() {
+  function report(heartbeat = false) {
     // controls.update() can call back here when YouTube's controls change; the outer call already sends it.
     if (!port || reporting) return;
     reporting = true;
@@ -36,9 +38,15 @@
       const state = controller.getStatus();
       controls.update(state, !paused && !document.hidden);
       const { enabled, adActive, rate, contentRate, contentAppliedRate, contentError, videoContext, contentSpeedAvailable } = state;
-      port.postMessage({ type: "status", enabled, adActive, rate, contentRate,
+      const message = { type: "status", enabled, adActive, rate, contentRate,
         contentAppliedRate, contentError, videoContext, contentSpeedAvailable, url: location.href, revision, paused,
-        controlsVisible: controls.controlsShown() });
+        controlsVisible: controls.controlsShown() };
+      const text = JSON.stringify(message);
+      // Unchanged status is resent only every fifth tick, so native state still recovers if it reset.
+      if (text === lastStatus && !(heartbeat && ++unchangedTicks >= 5)) return;
+      lastStatus = text;
+      unchangedTicks = 0;
+      port.postMessage(message);
     } finally { reporting = false; }
   }
 
@@ -51,11 +59,14 @@
     paused = true;
     revision = -1;
     lastCommandId = 0;
+    lastStatus = null;
+    unchangedTicks = 0;
     apply();
   }
 
   function connect() {
     if (port) return;
+    lastStatus = null;
     apply(); // Fail closed until the native host supplies its current state.
     const connection = browser.runtime.connectNative("accelerator");
     port = connection;
@@ -89,7 +100,7 @@
       report(); // Acknowledges restoration and video pause before native suspension.
     });
     connection.onDisconnect.addListener(() => { if (port === connection) disconnect(); });
-    timer = setInterval(report, 1000);
+    timer = setInterval(() => report(true), 1000);
     report();
   }
 

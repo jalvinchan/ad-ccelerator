@@ -5,12 +5,17 @@ import android.app.AlertDialog;
 import android.annotation.SuppressLint;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ActivityInfo;
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.util.TypedValue;
 import android.view.HapticFeedbackConstants;
 import android.view.View;
 import android.view.ViewConfiguration;
@@ -45,7 +50,7 @@ import java.util.List;
 public final class MainActivity extends Activity {
     private static final String HOME = "https://m.youtube.com/";
     private static final String EXTENSION_ID = "accelerator@ad-ccelerator.local";
-    private static final int SPEED_BUTTON_WIDTH_DP = 88;
+    private static final int SPEED_BUTTON_WIDTH_DP = 64;
     private static final int SPEED_BUTTON_HEIGHT_DP = 48;
     // GeckoRuntime may only be created once per process; sessions belong to activities.
     private static GeckoRuntime runtime;
@@ -254,6 +259,7 @@ public final class MainActivity extends Activity {
         fullscreenSpeedButton = new Button(this);
         fullscreenSpeedButton.setOnClickListener(view -> chooseSpeed());
         fullscreenSpeedButton.setAllCaps(false);
+        styleSpeedButton();
         fullscreenSpeedButton.setOnTouchListener(this::dragSpeedButton);
         // Positioned by translation so dragging and rotation never trigger a relayout.
         root.addView(fullscreenSpeedButton, new FrameLayout.LayoutParams(
@@ -262,6 +268,26 @@ public final class MainActivity extends Activity {
             placeSpeedButton());
         fullscreenSpeedButton.setVisibility(View.GONE);
         resetContentControls();
+    }
+
+    private void styleSpeedButton() {
+        // Same dark pill as the page chip, so both modes look alike.
+        GradientDrawable pill = new GradientDrawable();
+        pill.setColor(0xD9181818);
+        pill.setCornerRadius(dp(24));
+        Button button = fullscreenSpeedButton;
+        button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), pill, null));
+        button.setStateListAnimator(null);
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setMinHeight(0);
+        button.setMinimumHeight(0);
+        button.setPadding(dp(8), 0, dp(8), 0);
+        button.setGravity(Gravity.CENTER);
+        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        button.setTypeface(Typeface.DEFAULT_BOLD);
+        button.setTextColor(new ColorStateList(new int[][] {{-android.R.attr.state_enabled}, {}},
+            new int[] {0x80FFFFFF, Color.WHITE}));
     }
 
     private float speedTravelX() {
@@ -341,6 +367,15 @@ public final class MainActivity extends Activity {
         } catch (JSONException error) {
             throw new IllegalStateException(error);
         }
+    }
+
+    private void resetChipPosition() {
+        chipX = -1;
+        chipY = -1;
+        getPreferences(MODE_PRIVATE).edit().remove("speedChipX").remove("speedChipY").apply();
+        placeSpeedButton();
+        sendChipPosition();
+        root.announceForAccessibility(getString(R.string.chip_position_reset));
     }
 
     private boolean pageAtTop() {
@@ -586,9 +621,10 @@ public final class MainActivity extends Activity {
         if (port == null || videoContext == null || paused || !contentSpeedAvailable) return;
         String context = videoContext;
         WebExtension.Port connection = port;
+        boolean moved = chipX >= 0;
         // Each slider release or step applies at once; Done only closes the selector.
-        speedSelector = new AlertDialog.Builder(this).setTitle(R.string.playback_speed)
-            .setView(new SpeedSlider(this, contentRate, rate -> {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle(R.string.playback_speed)
+            .setView(new SpeedSlider(this, contentRate, moved ? null : getString(R.string.speed_chip_hint), rate -> {
                 if (connection != port || !videoContextEquals(context) || paused) {
                     if (speedSelector != null) speedSelector.dismiss();
                     showSpeedError();
@@ -603,7 +639,9 @@ public final class MainActivity extends Activity {
                         if (pendingCommand == id) { pendingCommand = 0; showSpeedError(); }
                     }, 2000);
                 } catch (JSONException error) { throw new IllegalStateException(error); }
-            })).setPositiveButton(R.string.done, null).create();
+            })).setPositiveButton(R.string.done, null);
+        if (moved) builder.setNeutralButton(R.string.reset_chip_position, (dialog, which) -> resetChipPosition());
+        speedSelector = builder.create();
         speedSelector.setOnDismissListener(dialog -> {
             speedSelector = null;
             if (fullscreen) revealSpeedButton();

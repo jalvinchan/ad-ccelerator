@@ -64,6 +64,7 @@ async function page({ stored = true, rate = 2, url = "https://m.youtube.com/watc
       pointerId: 1, clientX: 100, clientY: 100, ...values }); },
     external(rate) { video.playbackRate = rate; media.get("ratechange")({target: video}); },
     scan() { observe(); const callbacks = [...timers.values()]; timers.clear(); callbacks.forEach(callback => callback()); },
+    mutate(records) { observe(records); },
     speed(value, context = sandbox.YouTubeAdAccelerator.getStatus().videoContext) { return sandbox.YouTubeAdAccelerator.setContentRate(value, context); },
     change(value) { sandbox.YouTubeAdAccelerator.setEnabled(value); },
     navigation(event) { navigation.get(event)(); },
@@ -450,6 +451,22 @@ for (const baseline of [1.5, 2, 2.25]) {
     assert.equal(current.video.playbackRate, baseline);
   });
 }
+
+test("mutations that cannot touch the selected video are ignored", async () => {
+  const current = await page();
+  current.scan();
+  current.timers.clear();
+  current.mutate([{ type: "attributes", target: { nodeName: "DIV", classList: { contains: () => false }, contains: () => false } }]);
+  assert.equal(current.timers.size, 0);
+  current.mutate([{ type: "attributes", target: { nodeName: "VIDEO" } }]);
+  assert.equal(current.timers.size, 1);
+  current.scan(); // Flush the debounce latch before the next observation.
+  current.mutate([{ type: "attributes", target: { nodeName: "DIV", contains: node => node === current.player } }]);
+  assert.equal(current.timers.size, 1);
+  current.scan();
+  current.mutate([{ type: "childList", target: {} }]);
+  assert.equal(current.timers.size, 1);
+});
 
 test("sibling gesture recognition excludes native controls, unrelated overlays and outside touches", async () => {
   for (const kind of ["control", "unrelated", "outside"]) {

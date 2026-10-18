@@ -5,7 +5,7 @@ WebExtension that temporarily accelerates detected YouTube ads. Playback and
 acceleration run inside the same app and browser profile. Firefox does not need
 to be installed. This replaces the Android WebView prototype in commit `a117335`.
 
-**Experimental:** 0.4.4 passes Samsung normal-video native hold restoration
+**Experimental:** 0.4.5 passes Samsung normal-video native hold restoration
 and both speed-menu checks. Real-ad restoration was observed at 1×. Shorts
 hold-to-2× is human-verified. Earlier 0.4.1 passed controlled emulator
 acceptance. The user confirms
@@ -22,7 +22,7 @@ A small speed chip sits near the video’s upper-right corner on open
 videos and shows and hides with YouTube’s own player controls, in normal and
 fullscreen modes. Long-press the
 normal or fullscreen chip to drag it anywhere within the video; a drop past the
-edge snaps back inside. The spot is shared by both modes and kept across restarts. Ad acceleration
+edge snaps back inside. The spot is shared by both modes and kept across restarts. Until the chip is moved, the speed selector shows this tip; afterwards it offers Reset chip position. Both chips use the same dark pill. Ad acceleration
 is always on; routine status banners remain hidden.
 Fullscreen overrides portrait lock and restores the previous orientation policy
 on exit. Normal and fullscreen chips open the same selector: a 0.25×–4× slider
@@ -104,7 +104,7 @@ controlled fixture does not establish real YouTube ad acceleration.
 
 ## Current status
 
-Current app/extension: **0.4.4**, Android versionCode **10**.
+Current app/extension: **0.4.5**, Android versionCode **11**.
 
 | Item | Status |
 |---|---|

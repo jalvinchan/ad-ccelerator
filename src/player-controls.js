@@ -5,7 +5,7 @@
     const shadow = host.attachShadow({ mode: "closed" });
     const button = document.createElement("button");
     button.type = "button";
-    button.style.cssText = "all:initial;box-sizing:border-box;display:block;min-width:48px;height:48px;padding:0 8px;border-radius:24px;background:rgba(24,24,24,.85);color:white;font:600 14px sans-serif;text-align:center;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;transition:transform .15s";
+    button.style.cssText = "all:initial;box-sizing:border-box;display:block;min-width:64px;height:48px;padding:0 8px;border-radius:24px;background:rgba(24,24,24,.85);color:white;font:600 14px sans-serif;text-align:center;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;transition:transform .15s";
     shadow.append(button);
     host.style.cssText = "position:fixed;z-index:2147483647;display:none;transition:opacity .2s";
     let state = null;
