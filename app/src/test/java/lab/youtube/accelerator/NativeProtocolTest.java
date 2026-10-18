@@ -18,5 +18,8 @@ public class NativeProtocolTest {
         for (double rate : new double[] {1.1, 2.5, 8, 16}) assertTrue(NativeProtocol.optionalRate(rate));
         for (Object value : new Object[] {"2", true, 0, 16.1, Double.NaN, Double.POSITIVE_INFINITY})
             assertFalse(NativeProtocol.optionalRate(value));
+        for (Object value : new Object[] {0, 0.5, 1L}) assertTrue(NativeProtocol.fraction(value));
+        for (Object value : new Object[] {"0.5", true, null, -0.1, 1.1, Double.NaN})
+            assertFalse(NativeProtocol.fraction(value));
     }
 }

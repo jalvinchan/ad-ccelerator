@@ -16,6 +16,8 @@
   const controls = globalThis.YouTubePlayerControls(controller, videoContext => {
     if (port && !paused && !document.hidden) port.postMessage({ type: "open-speed-selector",
       videoContext, revision, url: location.href });
+  }, (x, y) => {
+    if (port && !paused && !document.hidden) port.postMessage({ type: "chip-position", x, y, revision, url: location.href });
   });
 
   function apply() {
@@ -63,6 +65,12 @@
         connection.postMessage({ type: "speed-result", commandId: message.commandId,
           revision, videoContext: message.videoContext, ...result });
         report();
+        return;
+      }
+      if (message?.type === "chip-position") {
+        const fraction = value => typeof value === "number" && value >= 0 && value <= 1;
+        if (message.x === null && message.y === null) controls.setPosition(null);
+        else if (fraction(message.x) && fraction(message.y)) controls.setPosition(message.x, message.y);
         return;
       }
       if (message?.type !== "state"

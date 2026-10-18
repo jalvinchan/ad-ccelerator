@@ -14,9 +14,11 @@ function host(url = 'https://m.youtube.com/watch?v=fixture', framed = false) {
   const context = vm.createContext({
     URL,
     location: { href: url, origin: new URL(url).origin },
-    YouTubePlayerControls(controller, open) {
+    YouTubePlayerControls(controller, open, save) {
       state.openSelector = open;
-      return { update() {}, hide() {} };
+      state.savePosition = save;
+      state.positions = [];
+      return { update() {}, hide() {}, setPosition(...args) { state.positions.push(args); } };
     },
     YouTubeAdAccelerator: {
       setEnabled(value) { state.enabled = value; effects.push(['enabled', value]); },
@@ -155,4 +157,18 @@ test('video chip requests the native selector only while the host is active', ()
   current.visibility(true);
   current.state.openSelector('current');
   assert.equal(current.effects.filter(effect => effect[1]?.type === 'open-speed-selector').length, 1);
+});
+
+test('chip position syncs both ways with typed fractions only', () => {
+  const current = host();
+  current.state.savePosition(0.25, 1);
+  assert.equal(current.effects.filter(effect => effect[1]?.type === 'chip-position').length, 0);
+  current.send(active(3));
+  current.state.savePosition(0.25, 1);
+  assert.deepEqual(current.effects.at(-1)[1], { type: 'chip-position', x: 0.25, y: 1, revision: 3,
+    url: 'https://m.youtube.com/watch?v=fixture' });
+  for (const [x, y] of [[0.5, 0], [null, null], ['0.5', 0], [1.5, 0], [0.5, undefined], [null, 0]]) {
+    current.send({ type: 'chip-position', x, y });
+  }
+  assert.deepEqual(current.state.positions.map(args => JSON.parse(JSON.stringify(args))), [[0.5, 0], [null]]);
 });

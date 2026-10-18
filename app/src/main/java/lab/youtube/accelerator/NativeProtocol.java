@@ -15,6 +15,9 @@ final class NativeProtocol {
     static boolean context(Object value) {
         return value instanceof String && !((String) value).isEmpty() && ((String) value).length() <= 200;
     }
+    static boolean fraction(Object value) {
+        return value instanceof Number && ((Number) value).doubleValue() >= 0 && ((Number) value).doubleValue() <= 1;
+    }
     static boolean optionalRate(Object value) {
         return value == null || value instanceof Number && Double.isFinite(((Number) value).doubleValue())
             && ((Number) value).doubleValue() > 0 && ((Number) value).doubleValue() <= 16;

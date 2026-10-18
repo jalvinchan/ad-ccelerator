@@ -19,7 +19,9 @@ from the top of the page to reload. A Reload button appears for page/browser
 errors. A circular arrow follows the pull, turns teal and gives haptic feedback
 at the release threshold, then spins until loading finishes and animates back.
 A small speed chip sits near the video’s upper-right corner on open
-videos, follows playback controls, and fades during playback. Ad acceleration
+videos, follows playback controls, and fades during playback. Long-press the
+normal or fullscreen chip to drag it anywhere within the video; a drop past the
+edge snaps back inside. The spot is shared by both modes and kept across restarts. Ad acceleration
 is always on; routine status banners remain hidden.
 Fullscreen overrides portrait lock and restores the previous orientation policy
 on exit. Normal and fullscreen selectors offer 0.25× through 4×, including

@@ -6,6 +6,7 @@ const code = readFileSync(require.resolve('../src/player-controls.js'), 'utf8');
 
 function controls() {
   let time = 0;
+  const timers = new Map();
   const elements = [];
   const events = new Map();
   const make = () => {
@@ -15,10 +16,11 @@ function controls() {
       setAttribute(key, value) { this.attributes[key] = value; },
       addEventListener(type, handler) { this.events[type] = handler; },
       matches() { return false; },
+      setPointerCapture() {},
     };
     return element;
   };
-  const rect = { width: 360, height: 220, top: 0, right: 360 };
+  const rect = { width: 360, height: 220, top: 0, left: 0, right: 360 };
   const player = { isConnected: true, classList: { contains: () => false },
     querySelector: () => null, contains: target => target === video };
   const video = { isConnected: true, paused: false, getBoundingClientRect: () => rect };
@@ -27,12 +29,18 @@ function controls() {
     addEventListener(type, callback) { events.set(type, callback); } };
   const location = {href:"https://m.youtube.com/watch?v=fixture"};
   const context = vm.createContext({ URL, location, document, innerWidth: 360, innerHeight: 640,
-    Date: { now: () => time }, addEventListener(type, callback) { events.set(type, callback); } });
+    Date: { now: () => time }, Math,
+    setTimeout(callback) { const id = timers.size + 1; timers.set(id, callback); return id; },
+    clearTimeout(id) { timers.delete(id); },
+    addEventListener(type, callback) { events.set(type, callback); } });
   vm.runInContext(code, context);
   const requests = [];
-  const ui = context.YouTubePlayerControls({ getPlayer: () => ({ player, video }) }, value => requests.push(value));
+  const saved = [];
+  const ui = context.YouTubePlayerControls({ getPlayer: () => ({ player, video }) }, value => requests.push(value),
+    (x, y) => saved.push([x, y]));
   const state = { videoContext: 'first', contentRate: 2.25, contentAppliedRate: 2.25, contentError: null };
-  return { ui, state, location, host: elements[0], button: elements[1], requests, video, rect, document, events,
+  return { ui, state, location, host: elements[0], button: elements[1], requests, saved, video, rect, document, events,
+    hold() { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); },
     tick(value) { time = value; ui.update(state, true); } };
 }
 
@@ -91,4 +99,38 @@ test('Shorts have no speed chip and holds display the remembered selection', () 
   current.location.href = 'https://m.youtube.com/shorts/fixture';
   current.tick(0);
   assert.equal(current.host.style.display, 'none');
+});
+
+test('long-press drags the chip freely, snaps it inside the video, saves it and skips the release tap', () => {
+  const current = controls();
+  current.tick(0);
+  const pointer = (type, clientX, clientY) => current.button.events[type]({ isPrimary: true, pointerId: 1,
+    clientX, clientY, preventDefault() {} });
+  pointer('pointerdown', 270, 20);
+  pointer('pointermove', 290, 20); // Moving before the hold completes is a scroll, not a drag.
+  current.hold();
+  assert.equal(current.host.style.left, '244px');
+  pointer('pointerup', 290, 20);
+  pointer('pointerdown', 270, 20);
+  current.hold();
+  pointer('pointermove', 100, 100);
+  assert.equal(current.host.style.left, '74px');
+  assert.equal(current.host.style.top, '84px');
+  pointer('pointermove', -500, 900);
+  pointer('pointerup', -500, 900);
+  assert.equal(current.host.style.left, '0px');
+  assert.equal(current.host.style.top, '172px');
+  assert.deepEqual(current.saved, [[0, 1]]);
+  current.button.events.click({stopPropagation() {}});
+  assert.equal(current.requests.length, 0);
+  current.tick(1000);
+  current.button.events.click({stopPropagation() {}});
+  assert.deepEqual(current.requests, ['first']);
+  current.rect.top = 40;
+  current.events.get('scroll')();
+  assert.equal(current.host.style.top, '212px');
+  current.ui.setPosition(0.5, 0);
+  assert.deepEqual([current.host.style.left, current.host.style.top], ['156px', '40px']);
+  current.ui.setPosition(null);
+  assert.equal(current.host.style.left, '244px');
 });

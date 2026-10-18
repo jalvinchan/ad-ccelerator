@@ -10,7 +10,9 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
+import android.view.HapticFeedbackConstants;
 import android.view.View;
+import android.view.ViewConfiguration;
 import android.view.MotionEvent;
 import android.view.Gravity;
 import android.view.WindowInsets;
@@ -73,6 +75,22 @@ public final class MainActivity extends Activity {
     private int commandId;
     private int pendingCommand;
     private AlertDialog speedSelector;
+    // Shared chip spot as fractions of its travel within the video; negative keeps the default top-right.
+    private float chipX = -1;
+    private float chipY = -1;
+    private boolean draggingSpeed;
+    private float dragRawX;
+    private float dragRawY;
+    private float dragStartX;
+    private float dragStartY;
+
+    private final Runnable pickUpSpeedButton = () -> {
+        draggingSpeed = true;
+        fullscreenSpeedButton.setPressed(false);
+        fullscreenSpeedButton.setScaleX(1.15f);
+        fullscreenSpeedButton.setScaleY(1.15f);
+        fullscreenSpeedButton.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+    };
 
     private final Runnable suspendSession = () -> {
         if (paused && session != null && session.isOpen()) session.setActive(false);
@@ -82,6 +100,8 @@ public final class MainActivity extends Activity {
         super.onCreate(savedState);
         // Retire prototype-only preferences without touching the browser profile.
         getPreferences(MODE_PRIVATE).edit().remove("enabled").remove("searchHistory").apply();
+        chipX = getPreferences(MODE_PRIVATE).getFloat("speedChipX", -1);
+        chipY = getPreferences(MODE_PRIVATE).getFloat("speedChipY", -1);
         buildUi();
         if (Build.VERSION.SDK_INT >= 33) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
@@ -131,6 +151,7 @@ public final class MainActivity extends Activity {
                             }
                         });
                         applyState();
+                        sendChipPosition();
                     }
                 }, "accelerator");
                 extensionReady = true;
@@ -144,7 +165,8 @@ public final class MainActivity extends Activity {
             });
     }
 
-    @SuppressLint("ClickableViewAccessibility") // Observer only: Gecko handles taps and its accessibility tree.
+    // Page listener is observer only; the speed button's drag listener still lets taps reach its click handler.
+    @SuppressLint("ClickableViewAccessibility")
     private void buildUi() {
         root = new FrameLayout(this);
         LinearLayout browser = new LinearLayout(this);
@@ -214,11 +236,90 @@ public final class MainActivity extends Activity {
         fullscreenSpeedButton = new Button(this);
         fullscreenSpeedButton.setOnClickListener(view -> chooseSpeed());
         fullscreenSpeedButton.setAllCaps(false);
-        FrameLayout.LayoutParams overlay = new FrameLayout.LayoutParams(dp(88), dp(48), Gravity.TOP | Gravity.END);
-        overlay.setMargins(dp(8), dp(8), dp(8), 0);
-        root.addView(fullscreenSpeedButton, overlay);
+        fullscreenSpeedButton.setOnTouchListener(this::dragSpeedButton);
+        // Positioned by translation so dragging and rotation never trigger a relayout.
+        root.addView(fullscreenSpeedButton, new FrameLayout.LayoutParams(dp(88), dp(48), Gravity.TOP | Gravity.START));
+        root.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
+            placeSpeedButton());
         fullscreenSpeedButton.setVisibility(View.GONE);
         resetContentControls();
+    }
+
+    private float speedTravelX() {
+        return Math.max(0, root.getWidth() - root.getPaddingLeft() - root.getPaddingRight() - dp(16) - fullscreenSpeedButton.getWidth());
+    }
+
+    private float speedTravelY() {
+        return Math.max(0, root.getHeight() - root.getPaddingTop() - root.getPaddingBottom() - dp(16) - fullscreenSpeedButton.getHeight());
+    }
+
+    private void placeSpeedButton() {
+        fullscreenSpeedButton.setTranslationX(dp(8) + (chipX < 0 ? 1 : chipX) * speedTravelX());
+        fullscreenSpeedButton.setTranslationY(dp(8) + (chipY < 0 ? 0 : chipY) * speedTravelY());
+    }
+
+    private static float clampFraction(float value) { return Math.min(1, Math.max(0, value)); }
+
+    /** Long-press picks the button up; a plain tap still opens the selector. */
+    private boolean dragSpeedButton(View view, MotionEvent event) {
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                dragRawX = event.getRawX();
+                dragRawY = event.getRawY();
+                dragStartX = view.getTranslationX();
+                dragStartY = view.getTranslationY();
+                handler.postDelayed(pickUpSpeedButton, ViewConfiguration.getLongPressTimeout());
+                return false;
+            case MotionEvent.ACTION_MOVE:
+                float dx = event.getRawX() - dragRawX;
+                float dy = event.getRawY() - dragRawY;
+                if (!draggingSpeed) {
+                    if (Math.hypot(dx, dy) > ViewConfiguration.get(this).getScaledTouchSlop()) {
+                        handler.removeCallbacks(pickUpSpeedButton);
+                    }
+                    return false;
+                }
+                // Dropping past the screen edge snaps the button back inside it.
+                float travelX = speedTravelX();
+                float travelY = speedTravelY();
+                chipX = travelX > 0 ? clampFraction((dragStartX + dx - dp(8)) / travelX) : 0;
+                chipY = travelY > 0 ? clampFraction((dragStartY + dy - dp(8)) / travelY) : 0;
+                placeSpeedButton();
+                return true;
+            case MotionEvent.ACTION_UP:
+            case MotionEvent.ACTION_CANCEL:
+                handler.removeCallbacks(pickUpSpeedButton);
+                if (!draggingSpeed) return false;
+                endSpeedDrag();
+                saveChipPosition(chipX, chipY);
+                sendChipPosition();
+                return true; // The release after a drag is not a tap.
+            default: return draggingSpeed;
+        }
+    }
+
+    private void endSpeedDrag() {
+        handler.removeCallbacks(pickUpSpeedButton);
+        draggingSpeed = false;
+        fullscreenSpeedButton.setScaleX(1);
+        fullscreenSpeedButton.setScaleY(1);
+    }
+
+    private void saveChipPosition(float x, float y) {
+        chipX = x;
+        chipY = y;
+        getPreferences(MODE_PRIVATE).edit().putFloat("speedChipX", x).putFloat("speedChipY", y).apply();
+        placeSpeedButton();
+    }
+
+    private void sendChipPosition() {
+        if (port == null) return;
+        try {
+            port.postMessage(new JSONObject().put("type", "chip-position")
+                .put("x", chipX < 0 ? JSONObject.NULL : chipX).put("y", chipY < 0 ? JSONObject.NULL : chipY));
+        } catch (JSONException error) {
+            throw new IllegalStateException(error);
+        }
     }
 
     private boolean pageAtTop() {
@@ -352,6 +453,13 @@ public final class MainActivity extends Activity {
                 && contentSpeedAvailable && videoContextEquals(state.opt("videoContext")) && speedSelector == null) chooseSpeed();
             return;
         }
+        if ("chip-position".equals(type)) {
+            if (!paused && !loadFailed && currentDocument(state)
+                && NativeProtocol.fraction(state.opt("x")) && NativeProtocol.fraction(state.opt("y"))) {
+                saveChipPosition(((Number) state.opt("x")).floatValue(), ((Number) state.opt("y")).floatValue());
+            }
+            return;
+        }
         if ("speed-result".equals(type)) {
             if (paused || !NativeProtocol.integer(state.opt("commandId"), pendingCommand)
                 || pendingCommand == 0 || !(state.opt("accepted") instanceof Boolean)
@@ -463,6 +571,7 @@ public final class MainActivity extends Activity {
     private void showFullscreen(boolean active) {
         if (fullscreen == active) return;
         fullscreen = active;
+        endSpeedDrag();
         cancelPull();
         refreshIndicator.hide();
         if (active) {
@@ -498,6 +607,7 @@ public final class MainActivity extends Activity {
 
     @Override protected void onPause() {
         paused = true;
+        endSpeedDrag();
         cancelPull();
         refreshIndicator.hide();
         if (speedSelector != null) speedSelector.dismiss();
