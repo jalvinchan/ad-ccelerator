@@ -20,7 +20,8 @@ function host(url = 'https://m.youtube.com/watch?v=fixture', framed = false) {
       state.positions = [];
       state.controlsChanged = changed;
       return { update() { if (state.reenter) state.controlsChanged(true); }, hide() {}, controlsShown: () => state.controls ?? null,
-        setPosition(...args) { state.positions.push(args); } };
+        setPosition(...args) { state.positions.push(args); },
+        setSeekInterval(seconds) { (state.seekIntervals ??= []).push(seconds); } };
     },
     YouTubeAdAccelerator: {
       setEnabled(value) { state.enabled = value; effects.push(['enabled', value]); },
@@ -28,6 +29,7 @@ function host(url = 'https://m.youtube.com/watch?v=fixture', framed = false) {
       setContentRate(rate, context) { effects.push(['speed', rate, context]);
         return context === 'current' && rate >= 0.25 && rate <= 4
           ? {accepted: true, pending: false} : {accepted: false, error: 'stale-context'}; },
+      seekBy(seconds, context) { effects.push(['seek', seconds, context]); return {accepted: true}; },
       getStatus() { return { enabled: state.enabled, adActive: false, rate: null }; },
     },
     document: {
@@ -144,6 +146,29 @@ test('speed messages require live revision, typed values, and unique command IDs
   assert.equal(current.effects.filter(effect => effect[0] === 'speed').length, 2);
 });
 
+
+test('seek commands need live revision and a valid interval; interval updates reach the chip', () => {
+  const current = host();
+  const seeks = () => current.effects.filter(effect => effect[0] === 'seek');
+  const seek = {type:'seek', revision:6, videoContext:'current', seconds:10};
+  current.send(active(6));
+  current.send({...seek, seconds:-15});
+  assert.deepEqual(seeks().at(-1), ['seek', -15, 'current']);
+  for (const invalid of [{...seek, revision:5}, {...seek, seconds:7}, {...seek, seconds:'10'},
+    {...seek, videoContext:1}, {...seek, videoContext:'x'.repeat(201)}]) {
+    const before = seeks().length;
+    current.send(invalid);
+    assert.equal(seeks().length, before);
+  }
+  current.visibility(true);
+  const before = seeks().length;
+  current.send(seek);
+  assert.equal(seeks().length, before);
+  current.send({type:'seek-interval', seconds:30});
+  current.send({type:'seek-interval', seconds:12});
+  current.send({type:'seek-interval', seconds:'5'});
+  assert.deepEqual(current.state.seekIntervals, [30]);
+});
 
 test('video chip requests the native selector only while the host is active', () => {
   const current = host();

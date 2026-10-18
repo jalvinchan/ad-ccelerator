@@ -12,7 +12,7 @@ function controls() {
   const events = new Map();
   const make = () => {
     const element = { style: {}, attributes: {}, events: {}, isConnected: false,
-      append(child) { child.isConnected = true; },
+      append(...children) { children.forEach(child => { child.isConnected = true; }); },
       attachShadow() { return make(); },
       setAttribute(key, value) { this.attributes[key] = value; },
       addEventListener(type, handler) { this.events[type] = handler; },
@@ -39,13 +39,36 @@ function controls() {
   vm.runInContext(code, context);
   const requests = [];
   const saved = [];
-  const ui = context.YouTubePlayerControls({ getPlayer: () => ({ player, video }) }, value => requests.push(value),
+  const seeks = [];
+  const ui = context.YouTubePlayerControls({ getPlayer: () => ({ player, video }),
+    seekBy: (seconds, videoContext) => seeks.push([seconds, videoContext]) }, value => requests.push(value),
     (x, y) => saved.push([x, y]));
   const state = { videoContext: 'first', contentRate: 2.25, contentAppliedRate: 2.25, contentError: null };
-  return { ui, state, location, observers, host: elements[0], button: elements[1], requests, saved, video, rect, document, events,
+  return { ui, state, location, observers, host: elements[0], button: elements[1], back: elements[3], forward: elements[4],
+    requests, saved, seeks, video, rect, document, events,
     hold() { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); },
     tick(value) { time = value; ui.update(state, true); } };
 }
+
+test('seek buttons jump by the chosen interval and stay inert when seeking is unavailable', () => {
+  const current = controls();
+  current.state.seekAvailable = true;
+  current.tick(0);
+  assert.equal(current.back.textContent, '−10');
+  assert.equal(current.forward.textContent, '+10');
+  current.back.events.click({stopPropagation() {}});
+  assert.deepEqual(current.seeks, [[-10, 'first']]);
+  current.ui.setSeekInterval(30);
+  current.ui.setSeekInterval(7);
+  assert.equal(current.forward.textContent, '+30');
+  current.forward.events.click({stopPropagation() {}});
+  assert.deepEqual(current.seeks.at(-1), [30, 'first']);
+  current.state.seekAvailable = false;
+  current.tick(0);
+  assert.equal(current.back.disabled, true);
+  current.back.events.click({stopPropagation() {}});
+  assert.equal(current.seeks.length, 2);
+});
 
 test('chip follows video geometry, fades during playback, reveals with interaction and opens current context', () => {
   const current = controls();

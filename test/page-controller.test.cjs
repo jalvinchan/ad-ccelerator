@@ -23,7 +23,7 @@ async function page({ stored = true, rate = 2, url = "https://m.youtube.com/watc
   };
   const video = {
     isConnected: true, nodeType: 1, parentElement: player,
-    playbackRate: 2, defaultPlaybackRate: 2, currentTime: 0, currentSrc: "content",
+    playbackRate: 2, defaultPlaybackRate: 2, currentTime: 0, duration: 600, currentSrc: "content",
     paused: true, volume: 0.8,
     getClientRects: () => [rect], getBoundingClientRect: () => rect,
   };
@@ -93,6 +93,34 @@ test("controller owns content speed, accelerates an ad, and restores selected sp
   current.scan();
   assert.equal(current.video.playbackRate, 3);
   assert.equal(current.intervals.size, 0);
+});
+
+test("seek moves content by the chosen interval, clamps to the video, and never seeks ads or Shorts", async () => {
+  const current = await page();
+  const context = current.status().videoContext;
+  const seekBy = (seconds, expectedContext = context) =>
+    JSON.parse(JSON.stringify(current.sandbox.YouTubeAdAccelerator.seekBy(seconds, expectedContext)));
+  assert.equal(current.status().seekAvailable, true);
+  assert.deepEqual(seekBy(10), {accepted: true});
+  assert.equal(current.video.currentTime, 10);
+  seekBy(-30);
+  assert.equal(current.video.currentTime, 0);
+  current.video.currentTime = 595;
+  seekBy(10);
+  assert.equal(current.video.currentTime, 600);
+  assert.deepEqual(seekBy(7), {accepted: false, error: "invalid-seek"});
+  assert.deepEqual(seekBy("10"), {accepted: false, error: "invalid-seek"});
+  assert.deepEqual(seekBy(10, "stale"), {accepted: false, error: "stale-context"});
+  current.player.ad = true;
+  current.scan();
+  assert.deepEqual(seekBy(10, current.status().videoContext), {accepted: false, error: "unavailable"});
+  assert.equal(current.status().seekAvailable, false);
+  const shorts = await page({url: "https://m.youtube.com/shorts/abc"});
+  assert.equal(shorts.status().seekAvailable, false);
+  current.player.ad = false;
+  current.video.duration = Infinity;
+  current.scan();
+  assert.equal(current.status().seekAvailable, false);
 });
 
 test("Android controls work without Chrome APIs and restore speed on toggle and app pause", async () => {

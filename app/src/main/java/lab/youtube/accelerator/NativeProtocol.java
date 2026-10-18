@@ -6,6 +6,7 @@ final class NativeProtocol {
     static final double MAX_RATE = 4;
     static final double RATE_STEP = 0.05;
     static final int RATE_STEPS = (int) Math.round((MAX_RATE - MIN_RATE) / RATE_STEP);
+    static final int[] SEEK_CHOICES = {5, 10, 15, 30};
     /** Nearest selectable rate, kept free of binary-fraction noise such as 1.0500000000000003. */
     static double snapRate(double rate) {
         double clamped = Math.min(MAX_RATE, Math.max(MIN_RATE, rate));
@@ -23,6 +24,10 @@ final class NativeProtocol {
     static boolean optionalRate(Object value) {
         return value == null || value instanceof Number && Double.isFinite(((Number) value).doubleValue())
             && ((Number) value).doubleValue() > 0 && ((Number) value).doubleValue() <= 16;
+    }
+    static boolean seekInterval(int seconds) {
+        for (int choice : SEEK_CHOICES) if (choice == seconds) return true;
+        return false;
     }
     private NativeProtocol() {}
 }

@@ -27,6 +27,8 @@ import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.window.OnBackInvokedDispatcher;
@@ -52,6 +54,9 @@ public final class MainActivity extends Activity {
     private static final String EXTENSION_ID = "accelerator@ad-ccelerator.local";
     private static final int SPEED_BUTTON_WIDTH_DP = 64;
     private static final int SPEED_BUTTON_HEIGHT_DP = 48;
+    private static final int SEEK_BUTTON_WIDTH_DP = 48;
+    private static final int CHIP_GAP_DP = 4;
+    private static final int CHIP_WIDTH_DP = SEEK_BUTTON_WIDTH_DP * 2 + SPEED_BUTTON_WIDTH_DP + CHIP_GAP_DP * 2;
     // GeckoRuntime may only be created once per process; sessions belong to activities.
     private static GeckoRuntime runtime;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -79,6 +84,11 @@ public final class MainActivity extends Activity {
     private float pullX;
     private float pullY;
     private Button fullscreenSpeedButton;
+    private LinearLayout fullscreenChip;
+    private Button seekBackButton;
+    private Button seekForwardButton;
+    private int seekInterval = 10;
+    private boolean seekAvailable;
     private String videoContext;
     private double contentRate = 1;
     private boolean contentSpeedAvailable = false;
@@ -100,8 +110,8 @@ public final class MainActivity extends Activity {
     private final Runnable pickUpSpeedButton = () -> {
         draggingSpeed = true;
         fullscreenSpeedButton.setPressed(false);
-        fullscreenSpeedButton.setScaleX(1.15f);
-        fullscreenSpeedButton.setScaleY(1.15f);
+        fullscreenChip.setScaleX(1.15f);
+        fullscreenChip.setScaleY(1.15f);
         fullscreenSpeedButton.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
     };
 
@@ -121,6 +131,8 @@ public final class MainActivity extends Activity {
         getPreferences(MODE_PRIVATE).edit().remove("enabled").remove("searchHistory").apply();
         chipX = getPreferences(MODE_PRIVATE).getFloat("speedChipX", -1);
         chipY = getPreferences(MODE_PRIVATE).getFloat("speedChipY", -1);
+        int savedSeek = getPreferences(MODE_PRIVATE).getInt("seekInterval", 10);
+        seekInterval = NativeProtocol.seekInterval(savedSeek) ? savedSeek : 10;
         buildUi();
         // A file left by a crash or killed process must not resurface on a later cold start.
         if (savedState == null) SessionStateStore.clear(sessionStateFile());
@@ -173,6 +185,7 @@ public final class MainActivity extends Activity {
                         });
                         applyState();
                         sendChipPosition();
+                        sendSeekInterval();
                     }
                 }, "accelerator");
                 extensionReady = true;
@@ -256,26 +269,39 @@ public final class MainActivity extends Activity {
         root.addView(refreshIndicator, new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
         browser.setFocusableInTouchMode(true);
         browser.requestFocus();
+        fullscreenChip = new LinearLayout(this);
+        fullscreenChip.setOrientation(LinearLayout.HORIZONTAL);
+        seekBackButton = new Button(this);
+        seekForwardButton = new Button(this);
         fullscreenSpeedButton = new Button(this);
+        for (Button button : new Button[] {seekBackButton, fullscreenSpeedButton, seekForwardButton}) {
+            button.setAllCaps(false);
+            stylePill(button);
+        }
+        seekBackButton.setOnClickListener(view -> sendSeek(-1));
+        seekForwardButton.setOnClickListener(view -> sendSeek(1));
         fullscreenSpeedButton.setOnClickListener(view -> chooseSpeed());
-        fullscreenSpeedButton.setAllCaps(false);
-        styleSpeedButton();
         fullscreenSpeedButton.setOnTouchListener(this::dragSpeedButton);
+        fullscreenChip.addView(seekBackButton, new LinearLayout.LayoutParams(dp(SEEK_BUTTON_WIDTH_DP), -1));
+        LinearLayout.LayoutParams speedParams = new LinearLayout.LayoutParams(dp(SPEED_BUTTON_WIDTH_DP), -1);
+        speedParams.setMargins(dp(CHIP_GAP_DP), 0, dp(CHIP_GAP_DP), 0);
+        fullscreenChip.addView(fullscreenSpeedButton, speedParams);
+        fullscreenChip.addView(seekForwardButton, new LinearLayout.LayoutParams(dp(SEEK_BUTTON_WIDTH_DP), -1));
         // Positioned by translation so dragging and rotation never trigger a relayout.
-        root.addView(fullscreenSpeedButton, new FrameLayout.LayoutParams(
-            dp(SPEED_BUTTON_WIDTH_DP), dp(SPEED_BUTTON_HEIGHT_DP), Gravity.TOP | Gravity.START));
+        root.addView(fullscreenChip, new FrameLayout.LayoutParams(
+            dp(CHIP_WIDTH_DP), dp(SPEED_BUTTON_HEIGHT_DP), Gravity.TOP | Gravity.START));
         root.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
             placeSpeedButton());
-        fullscreenSpeedButton.setVisibility(View.GONE);
+        fullscreenChip.setVisibility(View.GONE);
+        updateSeekButtons();
         resetContentControls();
     }
 
-    private void styleSpeedButton() {
+    private void stylePill(Button button) {
         // Same dark pill as the page chip, so both modes look alike.
         GradientDrawable pill = new GradientDrawable();
         pill.setColor(0xD9181818);
         pill.setCornerRadius(dp(24));
-        Button button = fullscreenSpeedButton;
         button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), pill, null));
         button.setStateListAnimator(null);
         button.setMinWidth(0);
@@ -291,7 +317,7 @@ public final class MainActivity extends Activity {
     }
 
     private float speedTravelX() {
-        return Math.max(0, root.getWidth() - root.getPaddingLeft() - root.getPaddingRight() - dp(16) - dp(SPEED_BUTTON_WIDTH_DP));
+        return Math.max(0, root.getWidth() - root.getPaddingLeft() - root.getPaddingRight() - dp(16) - dp(CHIP_WIDTH_DP));
     }
 
     private float speedTravelY() {
@@ -299,8 +325,8 @@ public final class MainActivity extends Activity {
     }
 
     private void placeSpeedButton() {
-        fullscreenSpeedButton.setTranslationX(dp(8) + (chipX < 0 ? 1 : chipX) * speedTravelX());
-        fullscreenSpeedButton.setTranslationY(dp(8) + (chipY < 0 ? 0 : chipY) * speedTravelY());
+        fullscreenChip.setTranslationX(dp(8) + (chipX < 0 ? 1 : chipX) * speedTravelX());
+        fullscreenChip.setTranslationY(dp(8) + (chipY < 0 ? 0 : chipY) * speedTravelY());
     }
 
     private static float clampFraction(float value) { return Math.min(1, Math.max(0, value)); }
@@ -312,8 +338,8 @@ public final class MainActivity extends Activity {
                 revealSpeedButton();
                 dragRawX = event.getRawX();
                 dragRawY = event.getRawY();
-                dragStartX = view.getTranslationX();
-                dragStartY = view.getTranslationY();
+                dragStartX = fullscreenChip.getTranslationX();
+                dragStartY = fullscreenChip.getTranslationY();
                 handler.postDelayed(pickUpSpeedButton, ViewConfiguration.getLongPressTimeout());
                 return false;
             case MotionEvent.ACTION_MOVE:
@@ -348,8 +374,8 @@ public final class MainActivity extends Activity {
         handler.removeCallbacks(pickUpSpeedButton);
         if (draggingSpeed && fullscreen) revealSpeedButton();
         draggingSpeed = false;
-        fullscreenSpeedButton.setScaleX(1);
-        fullscreenSpeedButton.setScaleY(1);
+        fullscreenChip.setScaleX(1);
+        fullscreenChip.setScaleY(1);
     }
 
     private void saveChipPosition(float x, float y) {
@@ -364,6 +390,44 @@ public final class MainActivity extends Activity {
         try {
             port.postMessage(new JSONObject().put("type", "chip-position")
                 .put("x", chipX < 0 ? JSONObject.NULL : chipX).put("y", chipY < 0 ? JSONObject.NULL : chipY));
+        } catch (JSONException error) {
+            throw new IllegalStateException(error);
+        }
+    }
+
+    private void updateSeekButtons() {
+        seekBackButton.setText(getString(R.string.seek_back_label, seekInterval));
+        seekForwardButton.setText(getString(R.string.seek_forward_label, seekInterval));
+        seekBackButton.setContentDescription(getString(R.string.seek_back_description, seekInterval));
+        seekForwardButton.setContentDescription(getString(R.string.seek_forward_description, seekInterval));
+        boolean enabled = videoContext != null && !paused && contentSpeedAvailable && seekAvailable;
+        seekBackButton.setEnabled(enabled);
+        seekForwardButton.setEnabled(enabled);
+    }
+
+    private void setSeekInterval(int seconds) {
+        if (!NativeProtocol.seekInterval(seconds) || seconds == seekInterval) return;
+        seekInterval = seconds;
+        getPreferences(MODE_PRIVATE).edit().putInt("seekInterval", seconds).apply();
+        updateSeekButtons();
+        sendSeekInterval();
+    }
+
+    private void sendSeekInterval() {
+        if (port == null) return;
+        try {
+            port.postMessage(new JSONObject().put("type", "seek-interval").put("seconds", seekInterval));
+        } catch (JSONException error) {
+            throw new IllegalStateException(error);
+        }
+    }
+
+    private void sendSeek(int direction) {
+        if (port == null || videoContext == null || paused || !seekAvailable || !fullscreen) return;
+        revealSpeedButton();
+        try {
+            port.postMessage(new JSONObject().put("type", "seek").put("revision", revision)
+                .put("videoContext", videoContext).put("seconds", direction * seekInterval));
         } catch (JSONException error) {
             throw new IllegalStateException(error);
         }
@@ -526,6 +590,7 @@ public final class MainActivity extends Activity {
         }
         if (!"status".equals(type) || !(state.opt("paused") instanceof Boolean)
             || !(state.opt("contentSpeedAvailable") instanceof Boolean)
+            || !(state.opt("seekAvailable") instanceof Boolean)
             || !(state.opt("enabled") instanceof Boolean) || !(state.opt("adActive") instanceof Boolean)
             || !(state.opt("contentRate") instanceof Number) || !NativeProtocol.optionalRate(state.opt("contentRate"))
             || !optionalRate(state, "rate") || !optionalRate(state, "contentAppliedRate")
@@ -546,6 +611,7 @@ public final class MainActivity extends Activity {
         if (videoContext != null && !videoContext.equals(context) && speedSelector != null) speedSelector.dismiss();
         videoContext = context;
         contentSpeedAvailable = Boolean.TRUE.equals(state.opt("contentSpeedAvailable"));
+        seekAvailable = Boolean.TRUE.equals(state.opt("seekAvailable"));
         if (!contentSpeedAvailable && speedSelector != null) speedSelector.dismiss();
         contentRate = ((Number) state.opt("contentRate")).doubleValue();
         pageControls = state.isNull("controlsVisible") ? null : (Boolean) state.opt("controlsVisible");
@@ -571,6 +637,7 @@ public final class MainActivity extends Activity {
         videoContext = null;
         pageControls = null;
         contentSpeedAvailable = false;
+        seekAvailable = false;
         contentRate = 1;
         pendingCommand = 0;
         if (speedSelector != null) speedSelector.dismiss();
@@ -584,6 +651,7 @@ public final class MainActivity extends Activity {
         fullscreenSpeedButton.setContentDescription(label);
         showSpeedButton();
         fullscreenSpeedButton.setEnabled(videoContext != null && !paused && contentSpeedAvailable);
+        updateSeekButtons();
     }
 
     private void revealSpeedButton() {
@@ -598,7 +666,7 @@ public final class MainActivity extends Activity {
     }
 
     private void showSpeedButton() {
-        View button = fullscreenSpeedButton;
+        View button = fullscreenChip;
         if (!fullscreen || !contentSpeedAvailable) {
             button.animate().cancel();
             button.setAlpha(1);
@@ -617,14 +685,38 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private View seekIntervalPicker() {
+        LinearLayout picker = new LinearLayout(this);
+        picker.setOrientation(LinearLayout.VERTICAL);
+        picker.setPadding(dp(24), dp(16), dp(24), dp(8));
+        TextView title = new TextView(this);
+        title.setText(R.string.seek_interval_title);
+        picker.addView(title);
+        RadioGroup choices = new RadioGroup(this);
+        choices.setOrientation(RadioGroup.HORIZONTAL);
+        for (int seconds : NativeProtocol.SEEK_CHOICES) {
+            RadioButton choice = new RadioButton(this);
+            choice.setId(View.generateViewId());
+            choice.setText(getString(R.string.seek_choice, seconds));
+            // Click, not the group's check listener, so restoring the saved choice sends nothing.
+            choice.setOnClickListener(view -> setSeekInterval(seconds));
+            choices.addView(choice, new RadioGroup.LayoutParams(0, -2, 1));
+            if (seconds == seekInterval) choices.check(choice.getId());
+        }
+        picker.addView(choices);
+        return picker;
+    }
+
     private void chooseSpeed() {
         if (port == null || videoContext == null || paused || !contentSpeedAvailable) return;
         String context = videoContext;
         WebExtension.Port connection = port;
         boolean moved = chipX >= 0;
         // Each slider release or step applies at once; Done only closes the selector.
-        AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle(R.string.playback_speed)
-            .setView(new SpeedSlider(this, contentRate, moved ? null : getString(R.string.speed_chip_hint), rate -> {
+        AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle(R.string.playback_speed);
+        LinearLayout body = new LinearLayout(this);
+        body.setOrientation(LinearLayout.VERTICAL);
+        body.addView(new SpeedSlider(this, contentRate, moved ? null : getString(R.string.speed_chip_hint), rate -> {
                 if (connection != port || !videoContextEquals(context) || paused) {
                     if (speedSelector != null) speedSelector.dismiss();
                     showSpeedError();
@@ -639,7 +731,9 @@ public final class MainActivity extends Activity {
                         if (pendingCommand == id) { pendingCommand = 0; showSpeedError(); }
                     }, 2000);
                 } catch (JSONException error) { throw new IllegalStateException(error); }
-            })).setPositiveButton(R.string.done, null);
+            }));
+        body.addView(seekIntervalPicker());
+        builder.setView(body).setPositiveButton(R.string.done, null);
         if (moved) builder.setNeutralButton(R.string.reset_chip_position, (dialog, which) -> resetChipPosition());
         speedSelector = builder.create();
         speedSelector.setOnDismissListener(dialog -> {

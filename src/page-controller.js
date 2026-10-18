@@ -3,6 +3,7 @@
   // The selector offers 0.25× through 4× in 0.05× steps.
   const selectableRate = rate => typeof rate === "number" && rate >= 0.25 && rate <= 4
     && Math.abs(rate * 20 - Math.round(rate * 20)) < 1e-6;
+  const SEEK_SECONDS = [5, 10, 15, 30];
   const documentId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   let enabled = false;
   let suspended = false;
@@ -60,6 +61,12 @@
     const url = new URL(location.href);
     return !shorts() && ((url.pathname === "/watch" && url.searchParams.has("v"))
       || /^\/(?:live|embed)\/[^/]+/.test(url.pathname));
+  }
+  // Ads are never seekable: seeking an ad would skip it, which this app does not do.
+  function seekable() {
+    if (!selected || !normalVideo() || selected.player.classList.contains("ad-showing")) return false;
+    const duration = selected.video.duration;
+    return Number.isFinite(duration) && duration > 0;
   }
   function invalidateGesture() {
     gesture = null;
@@ -278,11 +285,21 @@
       }
       return { accepted: true, pending: ad };
     },
+    seekBy(seconds, expectedContext) {
+      reconcile();
+      if (typeof seconds !== "number" || !SEEK_SECONDS.includes(Math.abs(seconds))) return { accepted: false, error: "invalid-seek" };
+      if (!context() || expectedContext !== context()) return { accepted: false, error: "stale-context" };
+      if (!seekable()) return { accepted: false, error: "unavailable" };
+      const video = selected.video;
+      video.currentTime = Math.min(video.duration, Math.max(0, video.currentTime + seconds));
+      return { accepted: true };
+    },
     getPlayer() { return selected; },
     getStatus() {
       reconcile();
       return { enabled, adActive: Boolean(selected?.player.classList.contains("ad-showing")),
         rate: session?.video.playbackRate ?? null, contentRate, contentSpeedAvailable: normalVideo(),
+        seekAvailable: seekable(),
         contentAppliedRate: selected && !holding() && !selected.player.classList.contains("ad-showing")
           ? selected.video.playbackRate : null,
         contentError, videoContext: context(), events };

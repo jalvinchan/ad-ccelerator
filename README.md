@@ -5,7 +5,7 @@ WebExtension that temporarily accelerates detected YouTube ads. Playback and
 acceleration run inside the same app and browser profile. Firefox does not need
 to be installed. This replaces the Android WebView prototype in commit `a117335`.
 
-**Experimental:** 0.4.6 passes Samsung normal-video native hold restoration
+**Experimental:** 0.4.7 passes Samsung normal-video native hold restoration
 and both speed-menu checks. Real-ad restoration was observed at 1×. Shorts
 hold-to-2× is human-verified. Earlier 0.4.1 passed controlled emulator
 acceptance. The user confirms
@@ -22,7 +22,7 @@ A small speed chip sits near the video’s upper-right corner on open
 videos and shows and hides with YouTube’s own player controls, in normal and
 fullscreen modes. Long-press the
 normal or fullscreen chip to drag it anywhere within the video; a drop past the
-edge snaps back inside. The spot is shared by both modes and kept across restarts. Until the chip is moved, the speed selector shows this tip; afterwards it offers Reset chip position. Both chips use the same dark pill. Ad acceleration
+edge snaps back inside. The spot is shared by both modes and kept across restarts. Until the chip is moved, the speed selector shows this tip; afterwards it offers Reset chip position. Both chips use the same dark pill. Back and forward buttons beside the chip jump by 5, 10, 15 or 30 seconds, chosen in the speed selector and kept across restarts; they are disabled during ads, on live streams and on Shorts. YouTube's own double-tap still jumps 10 seconds. Ad acceleration
 is always on; routine status banners remain hidden.
 Fullscreen overrides portrait lock and restores the previous orientation policy
 on exit. Normal and fullscreen chips open the same selector: a 0.25×–4× slider
@@ -39,7 +39,7 @@ New-window links open in the same tab. The extension runs only on exact HTTPS
 `m.youtube.com` and `www.youtube.com` origins.
 
 The shared controller tries 16×, 8×, then 4× during detected ads and restores the
-selected content speed afterward. It changes only playbackRate: no seeking,
+selected content speed afterward. It changes only playbackRate during ads: no seeking,
 muting, Skip clicks, ad blocking, downloads, or official YouTube app automation.
 Backgrounding restores speed and pauses video; returning does not call play().
 
@@ -104,7 +104,7 @@ controlled fixture does not establish real YouTube ad acceleration.
 
 ## Current status
 
-Current app/extension: **0.4.6**, Android versionCode **12**.
+Current app/extension: **0.4.7**, Android versionCode **13**.
 
 | Item | Status |
 |---|---|

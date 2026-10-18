@@ -25,4 +25,9 @@ public class NativeProtocolTest {
         for (Object value : new Object[] {"0.5", true, null, -0.1, 1.1, Double.NaN})
             assertFalse(NativeProtocol.fraction(value));
     }
+
+    @Test public void seekIntervalsAreLimitedToTheMenuChoices() {
+        for (int seconds : new int[] {5, 10, 15, 30}) assertTrue(NativeProtocol.seekInterval(seconds));
+        for (int seconds : new int[] {0, -10, 7, 20, 60}) assertFalse(NativeProtocol.seekInterval(seconds));
+    }
 }

@@ -3,15 +3,25 @@
   globalThis.YouTubePlayerControls = function (controller, openSelector, savePosition = () => {}, controlsChanged = () => {}) {
     const host = document.createElement("div");
     const shadow = host.attachShadow({ mode: "closed" });
+    const PILL = "all:initial;box-sizing:border-box;display:block;height:48px;padding:0 8px;border-radius:24px;background:rgba(24,24,24,.85);color:white;font:600 14px sans-serif;text-align:center;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;transition:transform .15s";
     const button = document.createElement("button");
     button.type = "button";
-    button.style.cssText = "all:initial;box-sizing:border-box;display:block;min-width:64px;height:48px;padding:0 8px;border-radius:24px;background:rgba(24,24,24,.85);color:white;font:600 14px sans-serif;text-align:center;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;transition:transform .15s";
-    shadow.append(button);
+    button.style.cssText = PILL + ";min-width:64px";
+    const row = document.createElement("div");
+    const back = document.createElement("button");
+    const forward = document.createElement("button");
+    row.style.cssText = "display:flex;gap:4px;align-items:center";
+    back.style.cssText = forward.style.cssText = PILL + ";min-width:48px";
+    back.type = forward.type = "button";
+    row.append(back, button, forward);
+    shadow.append(row);
     host.style.cssText = "position:fixed;z-index:2147483647;display:none;transition:opacity .2s";
     let state = null;
     let active = false;
     let revealedUntil = 0;
     let previousContext = null;
+    let seekInterval = 10;
+    const SEEK_SECONDS = [5, 10, 15, 30];
     // Free placement as fractions of the space the chip can travel within the video; null keeps the default spot.
     let position = null;
     let drag = null;
@@ -57,7 +67,8 @@
       return { width: box?.width || 48, height: box?.height || 48 };
     }
     function place(rect) {
-      if (!position) return { left: rect.right - 116, top: rect.top + 4 };
+      // The 68px right margin keeps clear of YouTube's cast/menu icons; equals the old spot for a 48px chip.
+      if (!position) return { left: rect.right - chipSize().width - 68, top: rect.top + 4 };
       const { width, height } = chipSize();
       return { left: rect.left + position.x * Math.max(0, rect.width - width),
         top: rect.top + position.y * Math.max(0, rect.height - height) };
@@ -90,7 +101,27 @@
       host.style.top = `${spot.top}px`;
       button.tabIndex = visible ? 0 : -1;
       button.setAttribute("aria-hidden", String(!visible));
+      back.tabIndex = forward.tabIndex = visible ? 0 : -1;
+      back.setAttribute("aria-hidden", String(!visible));
+      forward.setAttribute("aria-hidden", String(!visible));
     }
+    function labelSeek() {
+      back.textContent = `−${seekInterval}`;
+      forward.textContent = `+${seekInterval}`;
+      back.setAttribute("aria-label", `Back ${seekInterval} seconds`);
+      forward.setAttribute("aria-label", `Forward ${seekInterval} seconds`);
+    }
+    for (const [element, direction] of [[back, -1], [forward, 1]]) {
+      element.addEventListener("click", event => {
+        event.stopPropagation();
+        if (!active || !state?.seekAvailable || !state.videoContext) return;
+        controller.seekBy(direction * seekInterval, state.videoContext);
+        revealedUntil = Date.now() + 3000;
+        paint();
+      });
+      element.addEventListener("contextmenu", event => event.preventDefault());
+    }
+    labelSeek();
     function cancelDrag() {
       if (!drag) return;
       clearTimeout(drag.timer);
@@ -168,9 +199,17 @@
         const rejected = state.contentError || (state.contentAppliedRate != null && state.contentAppliedRate !== state.contentRate);
         button.textContent = rejected ? "! ×" : `${state.contentRate}×`;
         button.setAttribute("aria-label", rejected ? "Speed unavailable" : `Playback speed ${state.contentRate}×`);
+        const seekOff = !state.seekAvailable;
+        back.disabled = forward.disabled = seekOff;
+        back.style.opacity = forward.style.opacity = seekOff ? ".4" : "";
         paint();
       },
       controlsShown,
+      setSeekInterval(seconds) {
+        if (!SEEK_SECONDS.includes(seconds)) return;
+        seekInterval = seconds;
+        labelSeek();
+      },
       setPosition(x, y) {
         position = x == null ? null : { x: clamp(x), y: clamp(y) };
         paint();

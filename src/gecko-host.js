@@ -37,9 +37,9 @@
     try {
       const state = controller.getStatus();
       controls.update(state, !paused && !document.hidden);
-      const { enabled, adActive, rate, contentRate, contentAppliedRate, contentError, videoContext, contentSpeedAvailable } = state;
+      const { enabled, adActive, rate, contentRate, contentAppliedRate, contentError, videoContext, contentSpeedAvailable, seekAvailable } = state;
       const message = { type: "status", enabled, adActive, rate, contentRate,
-        contentAppliedRate, contentError, videoContext, contentSpeedAvailable, url: location.href, revision, paused,
+        contentAppliedRate, contentError, videoContext, contentSpeedAvailable, seekAvailable, url: location.href, revision, paused,
         controlsVisible: controls.controlsShown() };
       const text = JSON.stringify(message);
       // Unchanged status is resent only every fifth tick, so native state still recovers if it reset.
@@ -81,6 +81,18 @@
         const result = controller.setContentRate(message.rate, message.videoContext);
         connection.postMessage({ type: "speed-result", commandId: message.commandId,
           revision, videoContext: message.videoContext, ...result });
+        report();
+        return;
+      }
+      if (message?.type === "seek-interval") {
+        if ([5, 10, 15, 30].includes(message.seconds)) controls.setSeekInterval(message.seconds);
+        return;
+      }
+      if (message?.type === "seek") {
+        if (paused || document.hidden || message.revision !== revision
+          || typeof message.videoContext !== "string" || message.videoContext.length > 200
+          || typeof message.seconds !== "number" || ![5, 10, 15, 30].includes(Math.abs(message.seconds))) return;
+        controller.seekBy(message.seconds, message.videoContext);
         report();
         return;
       }

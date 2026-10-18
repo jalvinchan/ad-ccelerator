@@ -1,4 +1,4 @@
-<resources>
+<resources xmlns:tools="http://schemas.android.com/tools">
     <string name="app_name">YouTube Ad Accelerator</string>
     <string name="reload">Reload</string>
     <string name="release_to_reload">Release to reload</string>
@@ -21,4 +21,10 @@
     <string name="speed_chip_hint">Tip: long-press the speed chip to move it.</string>
     <string name="reset_chip_position">Reset chip position</string>
     <string name="chip_position_reset">Speed chip moved back to its default spot</string>
+    <string name="seek_interval_title">Skip buttons jump</string>
+    <string name="seek_choice">%1$d s</string>
+    <string name="seek_back_label">−%1$d</string>
+    <string name="seek_forward_label">+%1$d</string>
+    <string name="seek_back_description" tools:ignore="PluralsCandidate">Back %1$d seconds</string>
+    <string name="seek_forward_description" tools:ignore="PluralsCandidate">Forward %1$d seconds</string>
 </resources>
