@@ -23,8 +23,9 @@
     <string name="chip_position_reset">Speed chip moved back to its default spot</string>
     <string name="seek_interval_title">Skip buttons jump</string>
     <string name="seek_choice">%1$d s</string>
-    <string name="seek_back_label">−%1$d</string>
-    <string name="seek_forward_label">+%1$d</string>
+    <string name="seek_flash_back">−%1$d s</string>
+    <string name="seek_flash_forward">+%1$d s</string>
+    <string name="speed_section">Speed</string>
     <string name="seek_back_description" tools:ignore="PluralsCandidate">Back %1$d seconds</string>
     <string name="seek_forward_description" tools:ignore="PluralsCandidate">Forward %1$d seconds</string>
 </resources>

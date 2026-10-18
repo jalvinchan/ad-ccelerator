@@ -3,24 +3,49 @@
   globalThis.YouTubePlayerControls = function (controller, openSelector, savePosition = () => {}, controlsChanged = () => {}) {
     const host = document.createElement("div");
     const shadow = host.attachShadow({ mode: "closed" });
-    const PILL = "all:initial;box-sizing:border-box;display:block;height:48px;padding:0 8px;border-radius:24px;background:rgba(24,24,24,.85);color:white;font:600 14px sans-serif;text-align:center;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none;transition:transform .15s";
+    const SVG_NS = "http://www.w3.org/2000/svg";
+    // Built node by node: YouTube enforces Trusted Types, which rejects HTML string assignment.
+    function seekIcon(direction) {
+      const svg = document.createElementNS(SVG_NS, "svg");
+      const attributes = { viewBox: "0 0 30 30", width: "30", height: "30", fill: "none", stroke: "white",
+        "stroke-width": "2", "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" };
+      for (const [name, value] of Object.entries(attributes)) svg.setAttribute(name, value);
+      const paths = direction < 0 ? ["M8.5 9.5A9 9 0 1 1 6 15", "M8.5 4.5v5h5"] : ["M21.5 9.5A9 9 0 1 0 24 15", "M21.5 4.5v5h-5"];
+      for (const d of paths) {
+        const path = document.createElementNS(SVG_NS, "path");
+        path.setAttribute("d", d);
+        svg.append(path);
+      }
+      svg.style.cssText = "position:absolute;left:9px;top:9px;pointer-events:none";
+      return svg;
+    }
+    // One dark pill; segments are transparent so the dividers read as a single control.
+    const SEGMENT = "all:initial;box-sizing:border-box;position:relative;display:grid;place-items:center;height:48px;padding:0 10px;background:transparent;color:white;font:600 14px sans-serif;text-align:center;cursor:pointer;touch-action:none;user-select:none;-webkit-user-select:none";
     const button = document.createElement("button");
     button.type = "button";
-    button.style.cssText = PILL + ";min-width:64px";
+    button.style.cssText = SEGMENT + ";min-width:60px;border-left:1px solid rgba(255,255,255,.22);border-right:1px solid rgba(255,255,255,.22)";
     const row = document.createElement("div");
     const back = document.createElement("button");
     const forward = document.createElement("button");
-    row.style.cssText = "display:flex;gap:4px;align-items:center";
-    back.style.cssText = forward.style.cssText = PILL + ";min-width:48px";
+    const backNumber = document.createElement("span");
+    const forwardNumber = document.createElement("span");
+    const flash = document.createElement("div");
+    row.style.cssText = "display:flex;align-items:center;height:48px;border-radius:24px;overflow:hidden;background:rgba(24,24,24,.85);transition:transform .15s";
+    back.style.cssText = forward.style.cssText = SEGMENT + ";width:48px;padding:0";
     back.type = forward.type = "button";
+    backNumber.style.cssText = forwardNumber.style.cssText = "position:relative;top:1px;font:700 10px sans-serif;color:white;pointer-events:none";
+    flash.style.cssText = "position:absolute;top:52px;left:50%;transform:translateX(-50%);padding:4px 10px;border-radius:12px;background:rgba(24,24,24,.85);color:white;font:600 12px sans-serif;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .15s";
+    back.append(seekIcon(-1), backNumber);
+    forward.append(seekIcon(1), forwardNumber);
     row.append(back, button, forward);
-    shadow.append(row);
+    shadow.append(row, flash);
     host.style.cssText = "position:fixed;z-index:2147483647;display:none;transition:opacity .2s";
     let state = null;
     let active = false;
     let revealedUntil = 0;
     let previousContext = null;
     let seekInterval = 10;
+    let flashTimer = null;
     const SEEK_SECONDS = [5, 10, 15, 30];
     // Free placement as fractions of the space the chip can travel within the video; null keeps the default spot.
     let position = null;
@@ -60,7 +85,12 @@
       const content = overlay.querySelector(".player-controls-content");
       return Boolean(content) && getComputedStyle(content).visibility !== "hidden";
     }
-    function hide() { cancelDrag(); host.style.display = "none"; }
+    function hide() {
+      cancelDrag();
+      clearTimeout(flashTimer);
+      flash.style.opacity = "0";
+      host.style.display = "none";
+    }
     function clamp(value) { return Math.min(1, Math.max(0, value)); }
     function chipSize() {
       const box = host.getBoundingClientRect?.();
@@ -106,16 +136,21 @@
       forward.setAttribute("aria-hidden", String(!visible));
     }
     function labelSeek() {
-      back.textContent = `−${seekInterval}`;
-      forward.textContent = `+${seekInterval}`;
+      backNumber.textContent = forwardNumber.textContent = String(seekInterval);
       back.setAttribute("aria-label", `Back ${seekInterval} seconds`);
       forward.setAttribute("aria-label", `Forward ${seekInterval} seconds`);
+    }
+    function flashSeek(direction) {
+      flash.textContent = `${direction < 0 ? "−" : "+"}${seekInterval} s`;
+      flash.style.opacity = "1";
+      clearTimeout(flashTimer);
+      flashTimer = setTimeout(() => { flash.style.opacity = "0"; }, 600);
     }
     for (const [element, direction] of [[back, -1], [forward, 1]]) {
       element.addEventListener("click", event => {
         event.stopPropagation();
         if (!active || !state?.seekAvailable || !state.videoContext) return;
-        controller.seekBy(direction * seekInterval, state.videoContext);
+        if (controller.seekBy(direction * seekInterval, state.videoContext)?.accepted) flashSeek(direction);
         revealedUntil = Date.now() + 3000;
         paint();
       });
@@ -125,7 +160,7 @@
     function cancelDrag() {
       if (!drag) return;
       clearTimeout(drag.timer);
-      button.style.transform = "";
+      row.style.transform = "";
       drag = null;
     }
     // Long-press picks the chip up so a plain tap still opens the selector.
@@ -138,7 +173,7 @@
           drag.active = true;
           drag.left = parseFloat(host.style.left) || 0;
           drag.top = parseFloat(host.style.top) || 0;
-          button.style.transform = "scale(1.15)";
+          row.style.transform = "scale(1.15)";
           try { button.setPointerCapture?.(pointerId); } catch {}
           paint();
         }, HOLD_MS) };

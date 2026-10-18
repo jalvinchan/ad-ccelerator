@@ -28,6 +28,7 @@ function controls() {
   const document = { documentElement: make(), hidden: false, fullscreenElement: null, overlay: null,
     querySelector(selector) { return selector === '#player-control-overlay' ? this.overlay : null; },
     createElement() { const element = make(); elements.push(element); return element; },
+    createElementNS() { return make(); },
     addEventListener(type, callback) { events.set(type, callback); } };
   const location = {href:"https://m.youtube.com/watch?v=fixture"};
   const context = vm.createContext({ URL, location, document, innerWidth: 360, innerHeight: 640,
@@ -41,10 +42,12 @@ function controls() {
   const saved = [];
   const seeks = [];
   const ui = context.YouTubePlayerControls({ getPlayer: () => ({ player, video }),
-    seekBy: (seconds, videoContext) => seeks.push([seconds, videoContext]) }, value => requests.push(value),
+    seekBy: (seconds, videoContext) => { seeks.push([seconds, videoContext]); return { accepted: true }; } },
+    value => requests.push(value),
     (x, y) => saved.push([x, y]));
   const state = { videoContext: 'first', contentRate: 2.25, contentAppliedRate: 2.25, contentError: null };
   return { ui, state, location, observers, host: elements[0], button: elements[1], back: elements[3], forward: elements[4],
+    backNumber: elements[5], forwardNumber: elements[6], flash: elements[7],
     requests, saved, seeks, video, rect, document, events,
     hold() { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); },
     tick(value) { time = value; ui.update(state, true); } };
@@ -54,13 +57,13 @@ test('seek buttons jump by the chosen interval and stay inert when seeking is un
   const current = controls();
   current.state.seekAvailable = true;
   current.tick(0);
-  assert.equal(current.back.textContent, '−10');
-  assert.equal(current.forward.textContent, '+10');
+  assert.equal(current.backNumber.textContent, '10');
+  assert.equal(current.forwardNumber.textContent, '10');
   current.back.events.click({stopPropagation() {}});
   assert.deepEqual(current.seeks, [[-10, 'first']]);
   current.ui.setSeekInterval(30);
   current.ui.setSeekInterval(7);
-  assert.equal(current.forward.textContent, '+30');
+  assert.equal(current.forwardNumber.textContent, '30');
   current.forward.events.click({stopPropagation() {}});
   assert.deepEqual(current.seeks.at(-1), [30, 'first']);
   current.state.seekAvailable = false;
@@ -68,6 +71,21 @@ test('seek buttons jump by the chosen interval and stay inert when seeking is un
   assert.equal(current.back.disabled, true);
   current.back.events.click({stopPropagation() {}});
   assert.equal(current.seeks.length, 2);
+});
+
+test('a seek tap flashes the jump and the flash fades', () => {
+  const current = controls();
+  current.state.seekAvailable = true;
+  current.tick(0);
+  current.back.events.click({stopPropagation() {}});
+  assert.equal(current.flash.textContent, '−10 s');
+  assert.equal(current.flash.style.opacity, '1');
+  current.hold();
+  assert.equal(current.flash.style.opacity, '0');
+  current.state.seekAvailable = false;
+  current.tick(0);
+  current.forward.events.click({stopPropagation() {}});
+  assert.equal(current.flash.textContent, '−10 s');
 });
 
 test('chip follows video geometry, fades during playback, reveals with interaction and opens current context', () => {

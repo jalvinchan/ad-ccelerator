@@ -1,15 +1,20 @@
 package lab.youtube.accelerator;
 
 import android.app.Activity;
-import android.app.AlertDialog;
+import android.app.Dialog;
 import android.annotation.SuppressLint;
+import android.content.Context;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ActivityInfo;
 import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.ColorDrawable;
+import android.graphics.drawable.Drawable;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.InsetDrawable;
+import android.graphics.drawable.LayerDrawable;
 import android.graphics.drawable.RippleDrawable;
 import android.os.Build;
 import android.os.Bundle;
@@ -21,14 +26,14 @@ import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.MotionEvent;
 import android.view.Gravity;
+import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.LinearLayout;
-import android.widget.RadioButton;
-import android.widget.RadioGroup;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 import android.window.OnBackInvokedDispatcher;
@@ -55,8 +60,8 @@ public final class MainActivity extends Activity {
     private static final int SPEED_BUTTON_WIDTH_DP = 64;
     private static final int SPEED_BUTTON_HEIGHT_DP = 48;
     private static final int SEEK_BUTTON_WIDTH_DP = 48;
-    private static final int CHIP_GAP_DP = 4;
-    private static final int CHIP_WIDTH_DP = SEEK_BUTTON_WIDTH_DP * 2 + SPEED_BUTTON_WIDTH_DP + CHIP_GAP_DP * 2;
+    private static final int CHIP_DIVIDER_DP = 1;
+    private static final int CHIP_WIDTH_DP = SEEK_BUTTON_WIDTH_DP * 2 + SPEED_BUTTON_WIDTH_DP + CHIP_DIVIDER_DP * 2;
     // GeckoRuntime may only be created once per process; sessions belong to activities.
     private static GeckoRuntime runtime;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -94,7 +99,8 @@ public final class MainActivity extends Activity {
     private boolean contentSpeedAvailable = false;
     private int commandId;
     private int pendingCommand;
-    private AlertDialog speedSelector;
+    private Dialog speedSelector;
+    private TextView seekFlash;
     // Shared chip spot as fractions of its travel within the video; negative keeps the default top-right.
     private float chipX = -1;
     private float chipY = -1;
@@ -120,6 +126,9 @@ public final class MainActivity extends Activity {
         speedRevealed = false;
         showSpeedButton();
     };
+
+    private final Runnable hideSeekFlash = () ->
+        seekFlash.animate().alpha(0).setDuration(150).withEndAction(() -> seekFlash.setVisibility(View.GONE));
 
     private final Runnable suspendSession = () -> {
         if (paused && session != null && session.isOpen()) session.setActive(false);
@@ -274,22 +283,42 @@ public final class MainActivity extends Activity {
         seekBackButton = new Button(this);
         seekForwardButton = new Button(this);
         fullscreenSpeedButton = new Button(this);
-        for (Button button : new Button[] {seekBackButton, fullscreenSpeedButton, seekForwardButton}) {
-            button.setAllCaps(false);
-            stylePill(button);
-        }
+        for (Button button : new Button[] {seekBackButton, fullscreenSpeedButton, seekForwardButton}) button.setAllCaps(false);
+        styleSegment(fullscreenSpeedButton);
+        styleSeekButton(seekBackButton, R.drawable.ic_seek_back);
+        styleSeekButton(seekForwardButton, R.drawable.ic_seek_forward);
+        GradientDrawable pill = new GradientDrawable();
+        pill.setColor(0xD9181818);
+        pill.setCornerRadius(dp(24));
+        fullscreenChip.setBackground(pill);
+        fullscreenChip.setClipToOutline(true);
+        GradientDrawable line = new GradientDrawable();
+        line.setColor(0x38FFFFFF);
+        line.setSize(dp(CHIP_DIVIDER_DP), 0);
+        fullscreenChip.setDividerDrawable(new InsetDrawable(line, 0, dp(12), 0, dp(12)));
+        fullscreenChip.setShowDividers(LinearLayout.SHOW_DIVIDER_MIDDLE);
         seekBackButton.setOnClickListener(view -> sendSeek(-1));
         seekForwardButton.setOnClickListener(view -> sendSeek(1));
         fullscreenSpeedButton.setOnClickListener(view -> chooseSpeed());
         fullscreenSpeedButton.setOnTouchListener(this::dragSpeedButton);
         fullscreenChip.addView(seekBackButton, new LinearLayout.LayoutParams(dp(SEEK_BUTTON_WIDTH_DP), -1));
-        LinearLayout.LayoutParams speedParams = new LinearLayout.LayoutParams(dp(SPEED_BUTTON_WIDTH_DP), -1);
-        speedParams.setMargins(dp(CHIP_GAP_DP), 0, dp(CHIP_GAP_DP), 0);
-        fullscreenChip.addView(fullscreenSpeedButton, speedParams);
+        fullscreenChip.addView(fullscreenSpeedButton, new LinearLayout.LayoutParams(dp(SPEED_BUTTON_WIDTH_DP), -1));
         fullscreenChip.addView(seekForwardButton, new LinearLayout.LayoutParams(dp(SEEK_BUTTON_WIDTH_DP), -1));
         // Positioned by translation so dragging and rotation never trigger a relayout.
         root.addView(fullscreenChip, new FrameLayout.LayoutParams(
             dp(CHIP_WIDTH_DP), dp(SPEED_BUTTON_HEIGHT_DP), Gravity.TOP | Gravity.START));
+        seekFlash = new TextView(this);
+        GradientDrawable bubble = new GradientDrawable();
+        bubble.setColor(0xD9181818);
+        bubble.setCornerRadius(dp(12));
+        seekFlash.setBackground(bubble);
+        seekFlash.setTextColor(Color.WHITE);
+        seekFlash.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        seekFlash.setTypeface(Typeface.DEFAULT_BOLD);
+        seekFlash.setPadding(dp(10), dp(4), dp(10), dp(4));
+        seekFlash.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        seekFlash.setVisibility(View.GONE);
+        root.addView(seekFlash, new FrameLayout.LayoutParams(-2, -2, Gravity.TOP | Gravity.START));
         root.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
             placeSpeedButton());
         fullscreenChip.setVisibility(View.GONE);
@@ -297,12 +326,9 @@ public final class MainActivity extends Activity {
         resetContentControls();
     }
 
-    private void stylePill(Button button) {
-        // Same dark pill as the page chip, so both modes look alike.
-        GradientDrawable pill = new GradientDrawable();
-        pill.setColor(0xD9181818);
-        pill.setCornerRadius(dp(24));
-        button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), pill, null));
+    private void styleSegment(Button button) {
+        // Transparent segment inside the chip's single dark pill.
+        button.setBackground(new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), null, new ColorDrawable(Color.WHITE)));
         button.setStateListAnimator(null);
         button.setMinWidth(0);
         button.setMinimumWidth(0);
@@ -314,6 +340,16 @@ public final class MainActivity extends Activity {
         button.setTypeface(Typeface.DEFAULT_BOLD);
         button.setTextColor(new ColorStateList(new int[][] {{-android.R.attr.state_enabled}, {}},
             new int[] {0x80FFFFFF, Color.WHITE}));
+    }
+
+    private void styleSeekButton(Button button, int icon) {
+        styleSegment(button);
+        LayerDrawable layers = new LayerDrawable(new Drawable[] {getDrawable(icon), button.getBackground()});
+        layers.setLayerGravity(0, Gravity.CENTER);
+        layers.setLayerSize(0, dp(30), dp(30));
+        button.setBackground(layers);
+        button.setPadding(0, dp(2), 0, 0);
+        button.setTextSize(TypedValue.COMPLEX_UNIT_SP, 10);
     }
 
     private float speedTravelX() {
@@ -396,13 +432,15 @@ public final class MainActivity extends Activity {
     }
 
     private void updateSeekButtons() {
-        seekBackButton.setText(getString(R.string.seek_back_label, seekInterval));
-        seekForwardButton.setText(getString(R.string.seek_forward_label, seekInterval));
+        seekBackButton.setText(String.valueOf(seekInterval));
+        seekForwardButton.setText(String.valueOf(seekInterval));
         seekBackButton.setContentDescription(getString(R.string.seek_back_description, seekInterval));
         seekForwardButton.setContentDescription(getString(R.string.seek_forward_description, seekInterval));
         boolean enabled = videoContext != null && !paused && contentSpeedAvailable && seekAvailable;
         seekBackButton.setEnabled(enabled);
         seekForwardButton.setEnabled(enabled);
+        seekBackButton.setAlpha(enabled ? 1 : 0.4f);
+        seekForwardButton.setAlpha(enabled ? 1 : 0.4f);
     }
 
     private void setSeekInterval(int seconds) {
@@ -428,9 +466,23 @@ public final class MainActivity extends Activity {
         try {
             port.postMessage(new JSONObject().put("type", "seek").put("revision", revision)
                 .put("videoContext", videoContext).put("seconds", direction * seekInterval));
+            showSeekFlash(direction);
         } catch (JSONException error) {
             throw new IllegalStateException(error);
         }
+    }
+
+    private void showSeekFlash(int direction) {
+        seekFlash.setText(getString(direction < 0 ? R.string.seek_flash_back : R.string.seek_flash_forward, seekInterval));
+        seekFlash.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED);
+        // Centred under the chip, wherever it has been dragged.
+        seekFlash.setTranslationX(fullscreenChip.getTranslationX() + (dp(CHIP_WIDTH_DP) - seekFlash.getMeasuredWidth()) / 2f);
+        seekFlash.setTranslationY(fullscreenChip.getTranslationY() + dp(SPEED_BUTTON_HEIGHT_DP) + dp(4));
+        seekFlash.animate().cancel();
+        seekFlash.setAlpha(1);
+        seekFlash.setVisibility(View.VISIBLE);
+        handler.removeCallbacks(hideSeekFlash);
+        handler.postDelayed(hideSeekFlash, 600);
     }
 
     private void resetChipPosition() {
@@ -685,26 +737,15 @@ public final class MainActivity extends Activity {
         }
     }
 
-    private View seekIntervalPicker() {
-        LinearLayout picker = new LinearLayout(this);
-        picker.setOrientation(LinearLayout.VERTICAL);
-        picker.setPadding(dp(24), dp(16), dp(24), dp(8));
-        TextView title = new TextView(this);
-        title.setText(R.string.seek_interval_title);
-        picker.addView(title);
-        RadioGroup choices = new RadioGroup(this);
-        choices.setOrientation(RadioGroup.HORIZONTAL);
-        for (int seconds : NativeProtocol.SEEK_CHOICES) {
-            RadioButton choice = new RadioButton(this);
-            choice.setId(View.generateViewId());
-            choice.setText(getString(R.string.seek_choice, seconds));
-            // Click, not the group's check listener, so restoring the saved choice sends nothing.
-            choice.setOnClickListener(view -> setSeekInterval(seconds));
-            choices.addView(choice, new RadioGroup.LayoutParams(0, -2, 1));
-            if (seconds == seekInterval) choices.check(choice.getId());
-        }
-        picker.addView(choices);
-        return picker;
+    private View sectionHeader(Context context, int text) {
+        TextView header = new TextView(context);
+        header.setText(text);
+        header.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        header.setTypeface(Typeface.DEFAULT_BOLD);
+        header.setAlpha(0.7f);
+        if (Build.VERSION.SDK_INT >= 28) header.setAccessibilityHeading(true);
+        header.setPadding(dp(24), dp(16), dp(24), dp(4));
+        return header;
     }
 
     private void chooseSpeed() {
@@ -712,11 +753,23 @@ public final class MainActivity extends Activity {
         String context = videoContext;
         WebExtension.Port connection = port;
         boolean moved = chipX >= 0;
-        // Each slider release or step applies at once; Done only closes the selector.
-        AlertDialog.Builder builder = new AlertDialog.Builder(this).setTitle(R.string.playback_speed);
-        LinearLayout body = new LinearLayout(this);
+        Dialog sheet = new Dialog(this, android.R.style.Theme_Material_Dialog_NoActionBar);
+        Context themed = sheet.getContext();
+        sheet.setTitle(R.string.playback_speed); // Window title for accessibility; this theme shows no title bar.
+        LinearLayout body = new LinearLayout(themed);
         body.setOrientation(LinearLayout.VERTICAL);
-        body.addView(new SpeedSlider(this, contentRate, moved ? null : getString(R.string.speed_chip_hint), rate -> {
+        body.setPadding(0, dp(8), 0, dp(8));
+        View handle = new View(themed);
+        GradientDrawable grip = new GradientDrawable();
+        grip.setColor(0x66FFFFFF);
+        grip.setCornerRadius(dp(2));
+        handle.setBackground(grip);
+        LinearLayout.LayoutParams handleParams = new LinearLayout.LayoutParams(dp(32), dp(4));
+        handleParams.gravity = Gravity.CENTER_HORIZONTAL;
+        body.addView(handle, handleParams);
+        body.addView(sectionHeader(themed, R.string.speed_section));
+        // Each slider release, step or quick pick applies at once; Done only closes the selector.
+        body.addView(new SpeedSlider(themed, contentRate, moved ? null : getString(R.string.speed_chip_hint), rate -> {
                 if (connection != port || !videoContextEquals(context) || paused) {
                     if (speedSelector != null) speedSelector.dismiss();
                     showSpeedError();
@@ -732,10 +785,52 @@ public final class MainActivity extends Activity {
                     }, 2000);
                 } catch (JSONException error) { throw new IllegalStateException(error); }
             }));
-        body.addView(seekIntervalPicker());
-        builder.setView(body).setPositiveButton(R.string.done, null);
-        if (moved) builder.setNeutralButton(R.string.reset_chip_position, (dialog, which) -> resetChipPosition());
-        speedSelector = builder.create();
+        body.addView(sectionHeader(themed, R.string.seek_interval_title));
+        String[] seekLabels = new String[NativeProtocol.SEEK_CHOICES.length];
+        for (int i = 0; i < seekLabels.length; i++) seekLabels[i] = getString(R.string.seek_choice, NativeProtocol.SEEK_CHOICES[i]);
+        SegmentedControl seekChoices = new SegmentedControl(themed, seekLabels, seekLabels,
+            i -> setSeekInterval(NativeProtocol.SEEK_CHOICES[i]));
+        for (int i = 0; i < NativeProtocol.SEEK_CHOICES.length; i++) {
+            if (NativeProtocol.SEEK_CHOICES[i] == seekInterval) seekChoices.setSelectedIndex(i);
+        }
+        LinearLayout.LayoutParams seekParams = new LinearLayout.LayoutParams(-1, -2);
+        seekParams.setMargins(dp(24), dp(8), dp(24), dp(4));
+        body.addView(seekChoices, seekParams);
+        LinearLayout footer = new LinearLayout(themed);
+        footer.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        footer.setPadding(dp(16), dp(12), dp(16), 0);
+        if (moved) {
+            Button reset = new Button(themed, null, android.R.attr.borderlessButtonStyle);
+            reset.setText(R.string.reset_chip_position);
+            reset.setAllCaps(false);
+            reset.setOnClickListener(view -> { resetChipPosition(); sheet.dismiss(); });
+            footer.addView(reset);
+        }
+        Button done = new Button(themed, null, android.R.attr.borderlessButtonStyle);
+        done.setText(R.string.done);
+        done.setAllCaps(false);
+        done.setOnClickListener(view -> sheet.dismiss());
+        footer.addView(done);
+        body.addView(footer, new LinearLayout.LayoutParams(-1, -2));
+        ScrollView scroll = new ScrollView(themed);
+        scroll.addView(body);
+        sheet.setContentView(scroll);
+        Window window = sheet.getWindow();
+        if (window != null) {
+            GradientDrawable panel = new GradientDrawable();
+            panel.setColor(0xF2202020);
+            float r = dp(16);
+            panel.setCornerRadii(new float[] {r, r, r, r, 0, 0, 0, 0});
+            window.setBackgroundDrawable(panel);
+            window.setGravity(Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+            // Full width on phones in portrait, capped in landscape so the video stays visible beside it.
+            window.setLayout(Math.min(getResources().getDisplayMetrics().widthPixels, dp(560)),
+                WindowManager.LayoutParams.WRAP_CONTENT);
+            window.setDimAmount(0.3f);
+            window.setWindowAnimations(android.R.style.Animation_InputMethod);
+        }
+        sheet.setCanceledOnTouchOutside(true);
+        speedSelector = sheet;
         speedSelector.setOnDismissListener(dialog -> {
             speedSelector = null;
             if (fullscreen) revealSpeedButton();
@@ -760,6 +855,11 @@ public final class MainActivity extends Activity {
         if (active) revealSpeedButton();
         cancelPull();
         refreshIndicator.hide();
+        if (!active) {
+            handler.removeCallbacks(hideSeekFlash);
+            seekFlash.animate().cancel();
+            seekFlash.setVisibility(View.GONE);
+        }
         if (active) {
             previousOrientation = getRequestedOrientation();
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE);
