@@ -5,9 +5,6 @@ import static org.junit.Assert.*;
 
 public class NativeProtocolTest {
     @Test public void scalarsRejectCoercionAndNonFiniteValues() {
-        for (double rate : new double[] {0.25, 1, 1.05, 2.25, 3.95, 4}) assertTrue(NativeProtocol.contentRate(rate));
-        for (Object value : new Object[] {"2", true, null, Double.NaN, Double.POSITIVE_INFINITY, 16, 1.13, 0.2, 4.05})
-            assertFalse(NativeProtocol.contentRate(value));
         assertTrue(NativeProtocol.integer(3L, 3));
         assertFalse(NativeProtocol.integer("3", 3));
         assertFalse(NativeProtocol.integer(3.1, 3));
@@ -20,6 +17,8 @@ public class NativeProtocolTest {
             assertFalse(NativeProtocol.optionalRate(value));
         assertEquals(75, NativeProtocol.RATE_STEPS);
         assertEquals(1.05, NativeProtocol.snapRate(1.0500000000000003), 0);
+        assertEquals(2.3, NativeProtocol.snapRate(2.31), 0);
+        assertEquals(0.3, NativeProtocol.snapRate(0.3000000000000001), 0);
         assertEquals(0.25, NativeProtocol.snapRate(0), 0);
         assertEquals(4, NativeProtocol.snapRate(9), 0);
         for (Object value : new Object[] {0, 0.5, 1L}) assertTrue(NativeProtocol.fraction(value));

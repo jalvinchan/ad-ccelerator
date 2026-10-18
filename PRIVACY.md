@@ -11,8 +11,11 @@ GeckoView stores cookies, website storage, cache, and its installed extension
 locally. First-party cookies are accepted; third-party cookies are isolated by
 site, using GeckoView's browser setting. External browsers and the old WebView
 have separate storage; their cookies are not copied into GeckoView. The
-app does not store a separate search history or acceleration preference. YouTube
-owns its search UI and history within the browser profile. Retired prototype
+app does not store a separate search history or acceleration preference. It
+stores the speed chip's screen position, and while Android may recreate the app
+it keeps the browser's tab history in a private app file that is deleted once
+restored. YouTube owns its search UI and history within the browser profile.
+Retired prototype
 search-history and toggle preferences are removed on startup. Content-speed
 selection stays in document memory
 and resets on a new video or fresh load. Uninstalling or clearing app storage

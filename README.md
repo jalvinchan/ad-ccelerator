@@ -5,9 +5,10 @@ WebExtension that temporarily accelerates detected YouTube ads. Playback and
 acceleration run inside the same app and browser profile. Firefox does not need
 to be installed. This replaces the Android WebView prototype in commit `a117335`.
 
-**Experimental:** 0.4.3 passes Samsung normal-video native hold restoration
+**Experimental:** 0.4.4 passes Samsung normal-video native hold restoration
 and both speed-menu checks. Real-ad restoration was observed at 1×. Shorts
-hold-to-2× is human-verified; current results are recorded in Verification. Earlier 0.4.1 passed controlled emulator acceptance. The user confirms
+hold-to-2× is human-verified. Earlier 0.4.1 passed controlled emulator
+acceptance. The user confirms
 real ads accelerate and content speed is restored afterward. Quantitative live
 ad comparisons and a fix for the earlier loading gap are not claimed.
 The signed-out emulator can still encounter YouTube’s bot-verification prompt.
@@ -93,7 +94,7 @@ same-session HTTPS navigation. It returns to YouTube afterward. Use a test devic
 it temporarily changes rotation settings and backgrounds the app. The fixture and
 test harness are not packaged in the APK.
 Emulator recording and accessibility automation have repeatability limits;
-see the verification notes before interpreting a harness failure or success.
+treat a single harness failure or success as indicative, not conclusive.
 The harness saves/restores both device rotation settings.
 
 For live acceptance, use a non-Premium session that permits playback and observe
@@ -103,15 +104,16 @@ controlled fixture does not establish real YouTube ad acceleration.
 
 ## Current status
 
-Current app/extension: **0.4.3**, Android versionCode **9**.
+Current app/extension: **0.4.4**, Android versionCode **10**.
 
 | Item | Status |
 |---|---|
 | Both landscape fullscreen directions; restore prior orientation | Implemented; earlier phone checks passed |
 | Per-video speed in 0.05× steps, ad/lifecycle safeguards | Implemented; remembered speed is separate from temporary native holds |
+| Draggable speed chip, slider selector, chip follows YouTube's controls | Implemented; user-checked on the Samsung, device harness not yet re-run |
 | No normal toolbar; top-only refresh, error Reload, video speed chip | User confirms original behavior; refresh animation polish passes emulator checks |
 | Native search history | Dropped; YouTube owns search/history |
-| Cooperative content-speed ownership | Mobile-overlay recognition corrected in 0.4.3; see Verification for live results |
+| Cooperative content-speed ownership | Mobile-overlay recognition corrected in 0.4.3 |
 
 Upcoming work is listed separately in [BACKLOG.md](BACKLOG.md).
 

@@ -5,6 +5,7 @@ import android.app.AlertDialog;
 import android.annotation.SuppressLint;
 import android.content.pm.ApplicationInfo;
 import android.content.pm.ActivityInfo;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.os.Build;
 import android.os.Bundle;
@@ -36,12 +37,16 @@ import org.mozilla.geckoview.GeckoSessionSettings;
 import org.mozilla.geckoview.GeckoView;
 import org.mozilla.geckoview.WebExtension;
 import org.mozilla.geckoview.WebRequestError;
+import java.io.File;
+import java.io.IOException;
 import java.util.List;
 
 /** Single-session HTTPS browser with one bundled accelerator extension. */
 public final class MainActivity extends Activity {
     private static final String HOME = "https://m.youtube.com/";
     private static final String EXTENSION_ID = "accelerator@ad-ccelerator.local";
+    private static final int SPEED_BUTTON_WIDTH_DP = 88;
+    private static final int SPEED_BUTTON_HEIGHT_DP = 48;
     // GeckoRuntime may only be created once per process; sessions belong to activities.
     private static GeckoRuntime runtime;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -112,6 +117,8 @@ public final class MainActivity extends Activity {
         chipX = getPreferences(MODE_PRIVATE).getFloat("speedChipX", -1);
         chipY = getPreferences(MODE_PRIVATE).getFloat("speedChipY", -1);
         buildUi();
+        // A file left by a crash or killed process must not resurface on a later cold start.
+        if (savedState == null) SessionStateStore.clear(sessionStateFile());
         if (Build.VERSION.SDK_INT >= 33) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                 OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
@@ -164,8 +171,9 @@ public final class MainActivity extends Activity {
                     }
                 }, "accelerator");
                 extensionReady = true;
-                if (savedState != null) {
-                    sessionState = GeckoSession.SessionState.fromString(savedState.getString("browserState"));
+                if (savedState != null && savedState.getBoolean("browserStateSaved")) {
+                    String saved = SessionStateStore.take(sessionStateFile());
+                    if (saved != null) sessionState = GeckoSession.SessionState.fromString(saved);
                 }
                 if (sessionState != null) session.restoreState(sessionState);
                 else session.loadUri(HOME);
@@ -248,7 +256,8 @@ public final class MainActivity extends Activity {
         fullscreenSpeedButton.setAllCaps(false);
         fullscreenSpeedButton.setOnTouchListener(this::dragSpeedButton);
         // Positioned by translation so dragging and rotation never trigger a relayout.
-        root.addView(fullscreenSpeedButton, new FrameLayout.LayoutParams(dp(88), dp(48), Gravity.TOP | Gravity.START));
+        root.addView(fullscreenSpeedButton, new FrameLayout.LayoutParams(
+            dp(SPEED_BUTTON_WIDTH_DP), dp(SPEED_BUTTON_HEIGHT_DP), Gravity.TOP | Gravity.START));
         root.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) ->
             placeSpeedButton());
         fullscreenSpeedButton.setVisibility(View.GONE);
@@ -256,11 +265,11 @@ public final class MainActivity extends Activity {
     }
 
     private float speedTravelX() {
-        return Math.max(0, root.getWidth() - root.getPaddingLeft() - root.getPaddingRight() - dp(16) - fullscreenSpeedButton.getWidth());
+        return Math.max(0, root.getWidth() - root.getPaddingLeft() - root.getPaddingRight() - dp(16) - dp(SPEED_BUTTON_WIDTH_DP));
     }
 
     private float speedTravelY() {
-        return Math.max(0, root.getHeight() - root.getPaddingTop() - root.getPaddingBottom() - dp(16) - fullscreenSpeedButton.getHeight());
+        return Math.max(0, root.getHeight() - root.getPaddingTop() - root.getPaddingBottom() - dp(16) - dp(SPEED_BUTTON_HEIGHT_DP));
     }
 
     private void placeSpeedButton() {
@@ -534,8 +543,9 @@ public final class MainActivity extends Activity {
     }
 
     private void updateSpeedControls(boolean rejected) {
-        String label = rejected ? getString(R.string.speed_unavailable) : getString(R.string.content_speed, rateLabel(contentRate));
-        fullscreenSpeedButton.setText(rejected ? "! ×" : rateLabel(contentRate) + "×");
+        String label = rejected ? getString(R.string.speed_unavailable)
+            : getString(R.string.content_speed, SpeedSlider.label(contentRate).replace("×", ""));
+        fullscreenSpeedButton.setText(rejected ? "! ×" : SpeedSlider.label(contentRate));
         fullscreenSpeedButton.setContentDescription(label);
         showSpeedButton();
         fullscreenSpeedButton.setEnabled(videoContext != null && !paused && contentSpeedAvailable);
@@ -570,10 +580,6 @@ public final class MainActivity extends Activity {
                 if (!speedButtonShown()) button.setVisibility(View.INVISIBLE);
             });
         }
-    }
-
-    private static String rateLabel(double rate) {
-        return java.math.BigDecimal.valueOf(rate).stripTrailingZeros().toPlainString();
     }
 
     private void chooseSpeed() {
@@ -653,6 +659,12 @@ public final class MainActivity extends Activity {
         if (session != null) { session.setActive(true); applyState(); }
     }
 
+    @Override public void onConfigurationChanged(Configuration config) {
+        super.onConfigurationChanged(config);
+        // The activity now survives window and theme changes, so Gecko must hear about them itself.
+        if (runtime != null) runtime.configurationChanged(config);
+    }
+
     @Override protected void onPause() {
         paused = true;
         endSpeedDrag();
@@ -667,9 +679,18 @@ public final class MainActivity extends Activity {
         super.onPause();
     }
 
+    private File sessionStateFile() { return new File(getFilesDir(), SessionStateStore.FILE_NAME); }
+
     @Override protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
-        if (sessionState != null) state.putString("browserState", sessionState.toString());
+        if (sessionState == null) return;
+        try {
+            SessionStateStore.save(sessionStateFile(), sessionState.toString());
+            state.putBoolean("browserStateSaved", true);
+        } catch (IOException error) {
+            // Losing history on recreation is better than crashing on an oversized Bundle.
+            SessionStateStore.clear(sessionStateFile());
+        }
     }
 
     // Android 8–12 fallback; Android 13+ uses the native callback registered above.

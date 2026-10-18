@@ -138,6 +138,25 @@ test('long-press drags the chip freely, snaps it inside the video, saves it and 
   assert.equal(current.host.style.left, '244px');
 });
 
+test('losing pointer capture ends the drag and does not leave the chip stuck', () => {
+  const current = controls();
+  current.tick(0);
+  const pointer = (type, pointerId, clientX, clientY) => current.button.events[type]({ isPrimary: true, pointerId,
+    clientX, clientY, preventDefault() {} });
+  pointer('pointerdown', 1, 270, 20);
+  current.hold();
+  pointer('pointermove', 1, 100, 100);
+  current.button.events.lostpointercapture({ pointerId: 1 });
+  assert.equal(current.saved.length, 1);
+  assert.ok(Math.abs(current.saved[0][0] - 74 / (360 - 48)) < 1e-9);
+  assert.ok(Math.abs(current.saved[0][1] - 84 / (220 - 48)) < 1e-9);
+  const left = current.host.style.left;
+  pointer('pointerdown', 2, 270, 20);
+  current.hold();
+  pointer('pointermove', 2, 290, 20);
+  assert.notEqual(current.host.style.left, left);
+});
+
 test('on mobile YouTube the chip shows and hides with the player control overlay', () => {
   const current = controls();
   const content = { style: { visibility: 'hidden' } };

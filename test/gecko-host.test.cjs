@@ -19,7 +19,7 @@ function host(url = 'https://m.youtube.com/watch?v=fixture', framed = false) {
       state.savePosition = save;
       state.positions = [];
       state.controlsChanged = changed;
-      return { update() {}, hide() {}, controlsShown: () => state.controls ?? null,
+      return { update() { if (state.reenter) state.controlsChanged(true); }, hide() {}, controlsShown: () => state.controls ?? null,
         setPosition(...args) { state.positions.push(args); } };
     },
     YouTubeAdAccelerator: {
@@ -183,4 +183,16 @@ test('status carries YouTube control visibility and reports promptly when it cha
   current.state.controlsChanged(true);
   assert.equal(current.effects.at(-1)[1].type, 'status');
   assert.equal(current.effects.at(-1)[1].controlsVisible, true);
+});
+
+test('re-entrant control changes do not duplicate status reports', () => {
+  const current = host();
+  current.send(active(4));
+  const before = current.effects.filter(effect => effect[0] === 'report' && effect[1].type === 'status').length;
+  current.state.reenter = true;
+  current.state.controls = true;
+  current.state.controlsChanged(true);
+  const statuses = current.effects.filter(effect => effect[0] === 'report' && effect[1].type === 'status');
+  assert.equal(statuses.length, before + 1);
+  assert.equal(statuses.at(-1)[1].controlsVisible, true);
 });

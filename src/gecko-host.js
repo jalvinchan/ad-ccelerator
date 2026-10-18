@@ -12,6 +12,7 @@
   let paused = true;
   let revision = -1;
   let lastCommandId = 0;
+  let reporting = false;
 
   const controls = globalThis.YouTubePlayerControls(controller, videoContext => {
     if (port && !paused && !document.hidden) port.postMessage({ type: "open-speed-selector",
@@ -28,13 +29,17 @@
   }
 
   function report() {
-    if (!port) return;
-    const state = controller.getStatus();
-    controls.update(state, !paused && !document.hidden);
-    const { enabled, adActive, rate, contentRate, contentAppliedRate, contentError, videoContext, contentSpeedAvailable } = state;
-    port.postMessage({ type: "status", enabled, adActive, rate, contentRate,
-      contentAppliedRate, contentError, videoContext, contentSpeedAvailable, url: location.href, revision, paused,
-      controlsVisible: controls.controlsShown() });
+    // controls.update() can call back here when YouTube's controls change; the outer call already sends it.
+    if (!port || reporting) return;
+    reporting = true;
+    try {
+      const state = controller.getStatus();
+      controls.update(state, !paused && !document.hidden);
+      const { enabled, adActive, rate, contentRate, contentAppliedRate, contentError, videoContext, contentSpeedAvailable } = state;
+      port.postMessage({ type: "status", enabled, adActive, rate, contentRate,
+        contentAppliedRate, contentError, videoContext, contentSpeedAvailable, url: location.href, revision, paused,
+        controlsVisible: controls.controlsShown() });
+    } finally { reporting = false; }
   }
 
   function disconnect() {

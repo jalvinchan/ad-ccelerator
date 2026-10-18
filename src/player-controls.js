@@ -59,7 +59,7 @@
     function place(rect) {
       if (!position) return { left: rect.right - 116, top: rect.top + 4 };
       const { width, height } = chipSize();
-      return { left: (rect.left ?? rect.right - rect.width) + position.x * Math.max(0, rect.width - width),
+      return { left: rect.left + position.x * Math.max(0, rect.width - width),
         top: rect.top + position.y * Math.max(0, rect.height - height) };
     }
     function paint() {
@@ -80,8 +80,7 @@
       if (!host.isConnected) document.documentElement.append(host);
       const controlsHidden = player.classList.contains("ytp-autohide")
         || player.classList.contains("ytp-hide-controls");
-      const overlay = mobileControls();
-      const visible = drag?.active || button.matches(":focus-visible") || (overlay ? mobileControlsVisible(overlay)
+      const visible = drag?.active || button.matches(":focus-visible") || (shown !== null ? shown
         : video.paused || video.ended || Date.now() < revealedUntil || (!controlsHidden && controlsVisible(player)));
       host.style.display = "block";
       host.style.opacity = visible ? "1" : "0";
@@ -124,9 +123,8 @@
       // Dropping past the video edge snaps the chip back inside it.
       const rect = selected.video.getBoundingClientRect();
       const { width, height } = chipSize();
-      const left = rect.left ?? rect.right - rect.width;
       position = {
-        x: rect.width > width ? clamp((drag.left + dx - left) / (rect.width - width)) : 0,
+        x: rect.width > width ? clamp((drag.left + dx - rect.left) / (rect.width - width)) : 0,
         y: rect.height > height ? clamp((drag.top + dy - rect.top) / (rect.height - height)) : 0,
       };
       paint();
@@ -143,6 +141,7 @@
     }
     button.addEventListener("pointerup", endDrag);
     button.addEventListener("pointercancel", endDrag);
+    button.addEventListener("lostpointercapture", endDrag);
     button.addEventListener("contextmenu", event => event.preventDefault());
     button.addEventListener("click", event => {
       event.stopPropagation();
