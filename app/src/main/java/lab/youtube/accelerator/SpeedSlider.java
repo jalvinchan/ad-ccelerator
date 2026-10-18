@@ -40,7 +40,7 @@ final class SpeedSlider extends LinearLayout {
         readout.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
         addView(readout, new LayoutParams(-1, -2));
 
-        slider = new SeekBar(context);
+        slider = new TickedSeekBar(context);
         slider.setMax(NativeProtocol.RATE_STEPS);
         slider.setKeyProgressIncrement(1);
         slider.setContentDescription(context.getString(R.string.playback_speed));
