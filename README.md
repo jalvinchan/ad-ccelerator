@@ -5,7 +5,7 @@ WebExtension that temporarily accelerates detected YouTube ads. Playback and
 acceleration run inside the same app and browser profile. Firefox does not need
 to be installed. This replaces the Android WebView prototype in commit `a117335`.
 
-**Experimental:** 0.4.8 passes Samsung normal-video native hold restoration
+**Experimental:** 0.4.9 passes Samsung normal-video native hold restoration
 and both speed-menu checks. Real-ad restoration was observed at 1×. Shorts
 hold-to-2× is human-verified. Earlier 0.4.1 passed controlled emulator
 acceptance. The user confirms
@@ -22,12 +22,12 @@ A small speed chip sits near the video’s upper-right corner on open
 videos and shows and hides with YouTube’s own player controls, in normal and
 fullscreen modes. Long-press the
 normal or fullscreen chip to drag it anywhere within the video; a drop past the
-edge snaps back inside. The spot is shared by both modes and kept across restarts. Until the chip is moved, the speed selector shows this tip; afterwards it offers Reset chip position. Both chips are one dark pill: back and forward seek icons around the speed. Back and forward buttons beside the chip jump by 5, 10, 15 or 30 seconds, chosen in the speed selector and kept across restarts; they are disabled during ads, on live streams and on Shorts. YouTube's own double-tap still jumps 10 seconds. A seek tap briefly shows the jump under the chip. The selector is a dark sheet docked to the bottom, with Speed and Skip sections, quick picks for 1×, 1.25×, 1.5× and 2×, and Reset/Done at the foot. Ad acceleration
+edge snaps back inside. The spot is shared by both modes and kept across restarts. Until the chip is moved, the speed selector shows this tip; afterwards it offers Reset chip position. Both chips are one dark pill: back and forward seek icons around the speed. Back and forward buttons beside the chip jump by 5, 10, 15 or 30 seconds, chosen in the speed selector and kept across restarts; they are disabled during ads, on live streams and on Shorts. YouTube's own double-tap still jumps 10 seconds. A seek tap briefly shows the jump under the chip. The selector is a dark sheet docked to the bottom, with the speed readout between its ±0.05× steps, a Skip section, and Reset/Done at the foot. Ad acceleration
 is always on; routine status banners remain hidden.
 Fullscreen overrides portrait lock and restores the previous orientation policy
 on exit. Normal and fullscreen chips open the same selector: a 0.25×–4× slider
 with whole-speed marks and tick lines every 0.25×, an exact readout, and ±0.05× steps. Each release or step
-applies at once; Done closes it. Quick picks apply at once too. Each new normal video starts at 1× once; the current selection survives ads, rotation, and
+applies at once; Done closes it. Each new normal video starts at 1× once; the current selection survives ads, rotation, and
 background/resume. Selecting during an ad changes the rate restored afterward.
 YouTube menu selections also become the remembered speed. Native hold-to-2×
 temporarily yields to YouTube and restores the remembered selection after release.
@@ -104,7 +104,7 @@ controlled fixture does not establish real YouTube ad acceleration.
 
 ## Current status
 
-Current app/extension: **0.4.8**, Android versionCode **14**.
+Current app/extension: **0.4.9**, Android versionCode **15**.
 
 | Item | Status |
 |---|---|

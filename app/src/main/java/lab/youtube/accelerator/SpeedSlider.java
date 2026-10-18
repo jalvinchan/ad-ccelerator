@@ -12,20 +12,18 @@ import android.widget.LinearLayout;
 import android.widget.SeekBar;
 import android.widget.TextView;
 
-/** Selector body: a 0.25×–4× slider with whole-speed marks, an exact readout, ±0.05× steps and an optional note. */
+/** Selector body: readout flanked by ±0.05× steps, a 0.25×–4× tick slider with clickable whole-speed marks, and an optional note. */
 @SuppressLint("ViewConstructor") // Built only in code with its rate and listener.
 final class SpeedSlider extends LinearLayout {
     interface Listener { void onRate(double rate); }
 
     private static final double[] MARKS = {0.25, 1, 2, 3, 4};
-    static final double[] QUICK_RATES = {1, 1.25, 1.5, 2};
     private final Listener listener;
     private final TextView readout;
     private final SeekBar slider;
     private final FrameLayout marks;
     private final Button slower;
     private final Button faster;
-    private final SegmentedControl quick;
     private double applied;
     private boolean tracking;
 
@@ -36,11 +34,19 @@ final class SpeedSlider extends LinearLayout {
         setOrientation(VERTICAL);
         setPadding(dp(24), dp(8), dp(24), 0);
 
+        slower = stepButton(R.string.speed_slower, R.string.speed_slower_description, -1);
+        faster = stepButton(R.string.speed_faster, R.string.speed_faster_description, 1);
         readout = new TextView(context);
         readout.setGravity(Gravity.CENTER);
-        readout.setTextSize(TypedValue.COMPLEX_UNIT_SP, 32);
+        readout.setTextSize(TypedValue.COMPLEX_UNIT_SP, 28);
         readout.setAccessibilityLiveRegion(ACCESSIBILITY_LIVE_REGION_POLITE);
-        addView(readout, new LayoutParams(-1, -2));
+        // The fine steps flank the readout, so the exact speed and its nudges share one row.
+        LinearLayout header = new LinearLayout(context);
+        header.setGravity(Gravity.CENTER_VERTICAL);
+        header.addView(slower);
+        header.addView(readout, new LayoutParams(0, -2, 1));
+        header.addView(faster);
+        addView(header, new LayoutParams(-1, -2));
 
         slider = new TickedSeekBar(context);
         slider.setMax(NativeProtocol.RATE_STEPS);
@@ -66,30 +72,8 @@ final class SpeedSlider extends LinearLayout {
             });
             marks.addView(label, new FrameLayout.LayoutParams(-2, -1));
         }
-        addView(marks, new LayoutParams(-1, dp(48)));
+        addView(marks, new LayoutParams(-1, dp(32)));
         marks.addOnLayoutChangeListener((view, l, t, r, b, ol, ot, or, ob) -> placeMarks());
-
-        LinearLayout steps = new LinearLayout(context);
-        steps.setGravity(Gravity.CENTER);
-        slower = stepButton(R.string.speed_slower, R.string.speed_slower_description, -1);
-        faster = stepButton(R.string.speed_faster, R.string.speed_faster_description, 1);
-        steps.addView(slower);
-        steps.addView(faster);
-        addView(steps, new LayoutParams(-1, -2));
-
-        String[] quickLabels = new String[QUICK_RATES.length];
-        String[] quickDescriptions = new String[QUICK_RATES.length];
-        for (int i = 0; i < QUICK_RATES.length; i++) {
-            quickLabels[i] = label(QUICK_RATES[i]);
-            quickDescriptions[i] = context.getString(R.string.speed_mark_description, quickLabels[i]);
-        }
-        quick = new SegmentedControl(context, quickLabels, quickDescriptions, i -> {
-            slider.setProgress(index(QUICK_RATES[i]));
-            apply();
-        });
-        LayoutParams quickParams = new LayoutParams(-1, -2);
-        quickParams.topMargin = dp(12);
-        addView(quick, quickParams);
 
         slider.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
@@ -115,17 +99,17 @@ final class SpeedSlider extends LinearLayout {
     }
 
     private Button stepButton(int text, int description, int direction) {
-        Button button = new Button(getContext());
+        Button button = new Button(getContext(), null, android.R.attr.borderlessButtonStyle);
         button.setAllCaps(false);
         button.setText(text);
         button.setContentDescription(getContext().getString(description));
+        button.setMinWidth(dp(72));
+        button.setMinimumWidth(dp(72));
         button.setOnClickListener(view -> {
             slider.setProgress(slider.getProgress() + direction);
             apply();
         });
-        LayoutParams params = new LayoutParams(-2, -2);
-        params.setMargins(dp(6), dp(8), dp(6), 0);
-        button.setLayoutParams(params);
+        button.setLayoutParams(new LayoutParams(-2, dp(48)));
         return button;
     }
 
@@ -135,19 +119,12 @@ final class SpeedSlider extends LinearLayout {
         return (int) Math.round((rate - NativeProtocol.MIN_RATE) / NativeProtocol.RATE_STEP);
     }
 
-    static int quickIndex(double rate) {
-        int step = index(NativeProtocol.snapRate(rate));
-        for (int i = 0; i < QUICK_RATES.length; i++) if (index(QUICK_RATES[i]) == step) return i;
-        return -1;
-    }
-
     private void render() {
         String text = label(rate());
         readout.setText(text);
         if (Build.VERSION.SDK_INT >= 30) slider.setStateDescription(text);
         slower.setEnabled(slider.getProgress() > 0);
         faster.setEnabled(slider.getProgress() < NativeProtocol.RATE_STEPS);
-        quick.setSelectedIndex(quickIndex(rate()));
     }
 
     private void apply() {

@@ -767,8 +767,7 @@ public final class MainActivity extends Activity {
         LinearLayout.LayoutParams handleParams = new LinearLayout.LayoutParams(dp(32), dp(4));
         handleParams.gravity = Gravity.CENTER_HORIZONTAL;
         body.addView(handle, handleParams);
-        body.addView(sectionHeader(themed, R.string.speed_section));
-        // Each slider release, step or quick pick applies at once; Done only closes the selector.
+        // Each slider release, step or mark applies at once; Done only closes the selector.
         body.addView(new SpeedSlider(themed, contentRate, moved ? null : getString(R.string.speed_chip_hint), rate -> {
                 if (connection != port || !videoContextEquals(context) || paused) {
                     if (speedSelector != null) speedSelector.dismiss();
