@@ -218,12 +218,14 @@ test("fresh documents and different videos start at 1×; stale commands cannot c
   const current = await page({ rate: 1 });
   assert.equal(current.video.playbackRate, 1);
   const context = current.status().videoContext;
+  assert.equal(current.speed(1.05).accepted, true);
+  assert.equal(current.video.playbackRate, 1.05);
   assert.equal(current.speed(4).accepted, true);
   current.sandbox.location.href = "https://m.youtube.com/watch?v=second";
   assert.equal(current.speed(3, context).error, "stale-context");
   assert.equal(current.video.playbackRate, 1);
   assert.notEqual(current.status().videoContext, context);
-  for (const rate of [0, -1, 16, NaN, Infinity, "2", 1.1])
+  for (const rate of [0, -1, 16, NaN, Infinity, "2", 1.13, 0.2, 4.05])
     assert.equal(current.speed(rate).error, "invalid-rate");
   assert.equal(current.video.playbackRate, 1);
 });

@@ -79,6 +79,9 @@ public final class MainActivity extends Activity {
     private float chipX = -1;
     private float chipY = -1;
     private boolean draggingSpeed;
+    private boolean speedRevealed;
+    // YouTube's own control visibility from the page; null when unknown, so the timer decides.
+    private Boolean pageControls;
     private float dragRawX;
     private float dragRawY;
     private float dragStartX;
@@ -90,6 +93,12 @@ public final class MainActivity extends Activity {
         fullscreenSpeedButton.setScaleX(1.15f);
         fullscreenSpeedButton.setScaleY(1.15f);
         fullscreenSpeedButton.performHapticFeedback(HapticFeedbackConstants.LONG_PRESS);
+    };
+
+    // Without YouTube's control state, the fullscreen button fades after a few seconds and returns on touch.
+    private final Runnable fadeSpeedButton = () -> {
+        speedRevealed = false;
+        showSpeedButton();
     };
 
     private final Runnable suspendSession = () -> {
@@ -202,6 +211,7 @@ public final class MainActivity extends Activity {
         web.setOnTouchListener((view, event) -> {
             switch (event.getActionMasked()) {
                 case MotionEvent.ACTION_DOWN:
+                    if (fullscreen) revealSpeedButton();
                     pulling = pageAtTop() && !fullscreen && !paused && !loadFailed
                         && !refreshIndicator.isLoading();
                     pullX = event.getX();
@@ -264,6 +274,7 @@ public final class MainActivity extends Activity {
     private boolean dragSpeedButton(View view, MotionEvent event) {
         switch (event.getActionMasked()) {
             case MotionEvent.ACTION_DOWN:
+                revealSpeedButton();
                 dragRawX = event.getRawX();
                 dragRawY = event.getRawY();
                 dragStartX = view.getTranslationX();
@@ -300,6 +311,7 @@ public final class MainActivity extends Activity {
 
     private void endSpeedDrag() {
         handler.removeCallbacks(pickUpSpeedButton);
+        if (draggingSpeed && fullscreen) revealSpeedButton();
         draggingSpeed = false;
         fullscreenSpeedButton.setScaleX(1);
         fullscreenSpeedButton.setScaleY(1);
@@ -475,7 +487,8 @@ public final class MainActivity extends Activity {
             || !optionalRate(state, "rate") || !optionalRate(state, "contentAppliedRate")
             || !state.has("videoContext") || !state.has("contentError")
             || !(state.isNull("videoContext") || NativeProtocol.context(state.opt("videoContext")))
-            || !(state.isNull("contentError") || "rate-rejected".equals(state.opt("contentError")))) return;
+            || !(state.isNull("contentError") || "rate-rejected".equals(state.opt("contentError")))
+            || !(state.isNull("controlsVisible") || state.opt("controlsVisible") instanceof Boolean)) return;
         if (paused) {
             if (Boolean.TRUE.equals(state.opt("paused"))) {
                 handler.removeCallbacks(suspendSession);
@@ -491,6 +504,7 @@ public final class MainActivity extends Activity {
         contentSpeedAvailable = Boolean.TRUE.equals(state.opt("contentSpeedAvailable"));
         if (!contentSpeedAvailable && speedSelector != null) speedSelector.dismiss();
         contentRate = ((Number) state.opt("contentRate")).doubleValue();
+        pageControls = state.isNull("controlsVisible") ? null : (Boolean) state.opt("controlsVisible");
         boolean rejected = !state.isNull("contentError") || (!state.isNull("contentAppliedRate")
             && ((Number) state.opt("contentAppliedRate")).doubleValue() != contentRate);
         updateSpeedControls(rejected);
@@ -511,6 +525,7 @@ public final class MainActivity extends Activity {
 
     private void resetContentControls() {
         videoContext = null;
+        pageControls = null;
         contentSpeedAvailable = false;
         contentRate = 1;
         pendingCommand = 0;
@@ -522,8 +537,39 @@ public final class MainActivity extends Activity {
         String label = rejected ? getString(R.string.speed_unavailable) : getString(R.string.content_speed, rateLabel(contentRate));
         fullscreenSpeedButton.setText(rejected ? "! ×" : rateLabel(contentRate) + "×");
         fullscreenSpeedButton.setContentDescription(label);
-        fullscreenSpeedButton.setVisibility(fullscreen && contentSpeedAvailable ? View.VISIBLE : View.GONE);
+        showSpeedButton();
         fullscreenSpeedButton.setEnabled(videoContext != null && !paused && contentSpeedAvailable);
+    }
+
+    private void revealSpeedButton() {
+        speedRevealed = true;
+        handler.removeCallbacks(fadeSpeedButton);
+        handler.postDelayed(fadeSpeedButton, 3000);
+        showSpeedButton();
+    }
+
+    private boolean speedButtonShown() {
+        return draggingSpeed || speedSelector != null || (pageControls != null ? pageControls : speedRevealed);
+    }
+
+    private void showSpeedButton() {
+        View button = fullscreenSpeedButton;
+        if (!fullscreen || !contentSpeedAvailable) {
+            button.animate().cancel();
+            button.setAlpha(1);
+            button.setVisibility(View.GONE);
+        } else if (speedButtonShown()) {
+            if (button.getVisibility() != View.VISIBLE) {
+                button.setAlpha(0);
+                button.setVisibility(View.VISIBLE);
+            }
+            button.animate().alpha(1).setDuration(200).withEndAction(null);
+        } else if (button.getVisibility() == View.VISIBLE) {
+            // Invisible, not just transparent, so a touch there reaches the video and reveals it.
+            button.animate().alpha(0).setDuration(200).withEndAction(() -> {
+                if (!speedButtonShown()) button.setVisibility(View.INVISIBLE);
+            });
+        }
     }
 
     private static String rateLabel(double rate) {
@@ -534,27 +580,28 @@ public final class MainActivity extends Activity {
         if (port == null || videoContext == null || paused || !contentSpeedAvailable) return;
         String context = videoContext;
         WebExtension.Port connection = port;
-        String[] labels = new String[NativeProtocol.CONTENT_RATES.length];
-        int checked = -1;
-        for (int i = 0; i < labels.length; i++) {
-            labels[i] = rateLabel(NativeProtocol.CONTENT_RATES[i]) + "×";
-            if (NativeProtocol.CONTENT_RATES[i] == contentRate) checked = i;
-        }
+        // Each slider release or step applies at once; Done only closes the selector.
         speedSelector = new AlertDialog.Builder(this).setTitle(R.string.playback_speed)
-            .setSingleChoiceItems(labels, checked, (dialog, which) -> {
-                dialog.dismiss();
-                if (connection != port || !videoContextEquals(context) || paused) { showSpeedError(); return; }
+            .setView(new SpeedSlider(this, contentRate, rate -> {
+                if (connection != port || !videoContextEquals(context) || paused) {
+                    if (speedSelector != null) speedSelector.dismiss();
+                    showSpeedError();
+                    return;
+                }
                 try {
                     int id = ++commandId;
                     pendingCommand = id;
                     connection.postMessage(new JSONObject().put("type", "content-speed").put("revision", revision)
-                        .put("videoContext", context).put("commandId", id).put("rate", NativeProtocol.CONTENT_RATES[which]));
+                        .put("videoContext", context).put("commandId", id).put("rate", rate));
                     handler.postDelayed(() -> {
                         if (pendingCommand == id) { pendingCommand = 0; showSpeedError(); }
                     }, 2000);
                 } catch (JSONException error) { throw new IllegalStateException(error); }
-            }).setNegativeButton(android.R.string.cancel, null).create();
-        speedSelector.setOnDismissListener(dialog -> speedSelector = null);
+            })).setPositiveButton(R.string.done, null).create();
+        speedSelector.setOnDismissListener(dialog -> {
+            speedSelector = null;
+            if (fullscreen) revealSpeedButton();
+        });
         speedSelector.show();
     }
 
@@ -572,6 +619,7 @@ public final class MainActivity extends Activity {
         if (fullscreen == active) return;
         fullscreen = active;
         endSpeedDrag();
+        if (active) revealSpeedButton();
         cancelPull();
         refreshIndicator.hide();
         if (active) {

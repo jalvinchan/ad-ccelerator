@@ -12,20 +12,21 @@ real ads accelerate and content speed is restored afterward. Quantitative live
 ad comparisons and a fix for the earlier loading gap are not claimed.
 The signed-out emulator can still encounter YouTube’s bot-verification prompt.
 Google’s sign-in form opens in-app; completion has not been tested.
-See [verification and remaining checks](docs/VERIFICATION.md).
 
 Normal mode has no native toolbar: use YouTube’s Home navigation and pull down
 from the top of the page to reload. A Reload button appears for page/browser
 errors. A circular arrow follows the pull, turns teal and gives haptic feedback
 at the release threshold, then spins until loading finishes and animates back.
 A small speed chip sits near the video’s upper-right corner on open
-videos, follows playback controls, and fades during playback. Long-press the
+videos and shows and hides with YouTube’s own player controls, in normal and
+fullscreen modes. Long-press the
 normal or fullscreen chip to drag it anywhere within the video; a drop past the
 edge snaps back inside. The spot is shared by both modes and kept across restarts. Ad acceleration
 is always on; routine status banners remain hidden.
 Fullscreen overrides portrait lock and restores the previous orientation policy
-on exit. Normal and fullscreen selectors offer 0.25× through 4×, including
-2.25×. Each new normal video starts at 1× once; the current selection survives ads, rotation, and
+on exit. Normal and fullscreen chips open the same selector: a 0.25×–4× slider
+with whole-speed marks, an exact readout, and ±0.05× steps. Each release or step
+applies at once; Done closes it. Each new normal video starts at 1× once; the current selection survives ads, rotation, and
 background/resume. Selecting during an ad changes the rate restored afterward.
 YouTube menu selections also become the remembered speed. Native hold-to-2×
 temporarily yields to YouTube and restores the remembered selection after release.
@@ -93,8 +94,7 @@ it temporarily changes rotation settings and backgrounds the app. The fixture an
 test harness are not packaged in the APK.
 Emulator recording and accessibility automation have repeatability limits;
 see the verification notes before interpreting a harness failure or success.
-The harness saves/restores both device rotation settings. Current results and
-remaining live checks are in [docs/VERIFICATION.md](docs/VERIFICATION.md).
+The harness saves/restores both device rotation settings.
 
 For live acceptance, use a non-Premium session that permits playback and observe
 an actual ad. Verify the mobile ad signal, measured media time and shorter ad
@@ -108,7 +108,7 @@ Current app/extension: **0.4.3**, Android versionCode **9**.
 | Item | Status |
 |---|---|
 | Both landscape fullscreen directions; restore prior orientation | Implemented; earlier phone checks passed |
-| Per-video speed, ad/lifecycle safeguards, including 2.25× | Implemented; remembered speed is separate from temporary native holds |
+| Per-video speed in 0.05× steps, ad/lifecycle safeguards | Implemented; remembered speed is separate from temporary native holds |
 | No normal toolbar; top-only refresh, error Reload, video speed chip | User confirms original behavior; refresh animation polish passes emulator checks |
 | Native search history | Dropped; YouTube owns search/history |
 | Cooperative content-speed ownership | Mobile-overlay recognition corrected in 0.4.3; see Verification for live results |
@@ -124,9 +124,5 @@ for this personal app; existing platform safeguards remain in place.
 
 - [Backlog](BACKLOG.md): upcoming work and outstanding acceptance, in suggested order.
 - [Privacy](PRIVACY.md): data, permissions and sharing the APK.
-- [Architecture](docs/BROWSER_ARCHITECTURE.md): ownership, trust boundaries and lifecycle.
-- [Verification](docs/VERIFICATION.md): current proof and remaining acceptance.
-- [History](docs/HISTORY.md): earlier engine/phone results and preserved ad-transition findings.
 
-Keep setup and user behavior here, upcoming work in Backlog, and current proof in Verification
-and append dated historical findings to History when they are superseded.
+Keep setup and user behavior here and upcoming work in Backlog.

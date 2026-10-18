@@ -10,6 +10,12 @@
     <string name="load_error">Page could not load. Check your connection and tap Reload.</string>
     <string name="content_speed">Speed %1$s×</string>
     <string name="playback_speed">Playback speed</string>
+    <string name="speed_slower">−0.05×</string>
+    <string name="speed_faster">+0.05×</string>
+    <string name="speed_slower_description">Decrease speed by 0.05×</string>
+    <string name="speed_faster_description">Increase speed by 0.05×</string>
+    <string name="done">Done</string>
+    <string name="speed_mark_description">Set speed to %1$s</string>
     <string name="speed_unavailable">Speed unavailable</string>
     <string name="speed_rejected">Speed could not be applied. Try again on the current video.</string>
 </resources>

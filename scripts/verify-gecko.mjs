@@ -147,21 +147,21 @@ function tapText(text) {
 }
 async function chooseSpeed(fromLabel, rate) {
   tapText(fromLabel);
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const xml = nativeUi();
-    const node = [...xml.matchAll(/<node[^>]*>/g)].map(match => match[0])
-      .find(node => node.includes(`text="${rate}×"`));
-    if (node) {
-      tap(node);
-      assert.ok(!nativeUi().includes('android.widget.ListView'), 'Speed selector must dismiss after selection');
-      return;
-    }
-    const list = xml.match(/<node[^>]*class="android.widget.ListView"[^>]*>/)?.[0];
-    assert.ok(list, 'Speed selector list must exist');
-    const [, x1,y1,x2,y2] = list.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/);
-    device('shell','input','swipe',String((+x1 + +x2)/2),String(+y2-10),String((+x1 + +x2)/2),String(+y1+10),'300');
+  const slider = nativeUi().match(/<node[^>]*class="android.widget.SeekBar"[^>]*>/)?.[0];
+  assert.ok(slider, 'Speed slider must exist');
+  const [, x1, y1, x2, y2] = slider.match(/bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"/).map(Number);
+  // Tap near the target on the track, then reach it exactly with the ±0.05× steps.
+  const fraction = (rate - 0.25) / 3.75;
+  device('shell', 'input', 'tap', String(Math.round(x1 + fraction * (x2 - x1))), String(Math.round((y1 + y2) / 2)));
+  const readout = () => Number(nativeUi().match(/<node[^>]*text="(\d+(?:\.\d+)?)×"/)?.[1]);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const steps = Math.round((rate - readout()) * 20);
+    if (steps === 0) break;
+    for (let i = 0; i < Math.abs(steps); i++) tapText(steps > 0 ? '+0.05×' : '−0.05×');
   }
-  assert.fail('Requested speed not found');
+  assert.equal(readout(), rate, 'Speed readout must show the requested rate');
+  tapText('Done');
+  assert.ok(!nativeUi().includes('android.widget.SeekBar'), 'Speed selector must dismiss after Done');
 }
 const results = {};
 try {
@@ -260,7 +260,7 @@ try {
   assert.equal(viewport.marker, 'retained', 'Rotation must retain the document');
   // Android's first-fullscreen onboarding can cover the native chip on a fresh emulator.
   if (nativeUi().includes('text="Got it"')) tapText('Got it');
-  await chooseSpeed('2.25×', 2.25);
+  await chooseSpeed('2.25×', 2.3);
   assert.ok([16,8,4].includes((await state()).rate), 'Ad-time selection must not change acceleration');
   results.fullscreenSpeedDuringAd = true;
   device('shell', 'input', 'keyevent', 'KEYCODE_BACK');
@@ -272,16 +272,16 @@ try {
   await tapFixture('play-fixture', 'Play fixture');
   await until(value => !value.paused, 'Fixture did not resume before backgrounding');
   device('shell', 'input', 'keyevent', 'KEYCODE_HOME');
-  await until(value => value.rate === 2.25 && value.paused, 'Native pause did not restore speed and pause playback');
+  await until(value => value.rate === 2.3 && value.paused, 'Native pause did not restore speed and pause playback');
   device('shell', 'am', 'start', '-n', 'lab.youtube.accelerator/.MainActivity');
   await until(value => [16, 8, 4].includes(value.rate) && value.paused, 'Resume did not restore controller while keeping video paused');
   results.pauseResume = true;
   console.log("Passed background/resume restoration");
   await evaluate('document.querySelector(".html5-video-player").classList.remove("ad-showing"); return true;');
-  await until(value => value.rate === 2.25, 'Ad exit did not restore content speed');
+  await until(value => value.rate === 2.3, 'Ad exit did not restore content speed');
   results.adExit = true;
   await navigate('https://support.google.com/youtube/answer/3037019');
-  assert.ok(!nativeUi().includes('text="2.25×"'), 'No speed chip outside trusted YouTube');
+  assert.ok(!nativeUi().includes('text="2.3×"'), 'No speed chip outside trusted YouTube');
   results.sameSessionHttps = true;
   const {previousRotation, previousUserRotation, ...passed} = results;
   console.log(JSON.stringify({fixtureOnly:true,...passed}, null, 2));

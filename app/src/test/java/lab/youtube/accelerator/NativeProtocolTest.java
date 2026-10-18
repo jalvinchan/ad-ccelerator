@@ -5,8 +5,8 @@ import static org.junit.Assert.*;
 
 public class NativeProtocolTest {
     @Test public void scalarsRejectCoercionAndNonFiniteValues() {
-        for (double rate : NativeProtocol.CONTENT_RATES) assertTrue(NativeProtocol.contentRate(rate));
-        for (Object value : new Object[] {"2", true, null, Double.NaN, Double.POSITIVE_INFINITY, 16, 1.1})
+        for (double rate : new double[] {0.25, 1, 1.05, 2.25, 3.95, 4}) assertTrue(NativeProtocol.contentRate(rate));
+        for (Object value : new Object[] {"2", true, null, Double.NaN, Double.POSITIVE_INFINITY, 16, 1.13, 0.2, 4.05})
             assertFalse(NativeProtocol.contentRate(value));
         assertTrue(NativeProtocol.integer(3L, 3));
         assertFalse(NativeProtocol.integer("3", 3));
@@ -18,6 +18,10 @@ public class NativeProtocolTest {
         for (double rate : new double[] {1.1, 2.5, 8, 16}) assertTrue(NativeProtocol.optionalRate(rate));
         for (Object value : new Object[] {"2", true, 0, 16.1, Double.NaN, Double.POSITIVE_INFINITY})
             assertFalse(NativeProtocol.optionalRate(value));
+        assertEquals(75, NativeProtocol.RATE_STEPS);
+        assertEquals(1.05, NativeProtocol.snapRate(1.0500000000000003), 0);
+        assertEquals(0.25, NativeProtocol.snapRate(0), 0);
+        assertEquals(4, NativeProtocol.snapRate(9), 0);
         for (Object value : new Object[] {0, 0.5, 1L}) assertTrue(NativeProtocol.fraction(value));
         for (Object value : new Object[] {"0.5", true, null, -0.1, 1.1, Double.NaN})
             assertFalse(NativeProtocol.fraction(value));

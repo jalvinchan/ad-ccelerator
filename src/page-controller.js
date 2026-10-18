@@ -1,6 +1,8 @@
 (() => {
   if (globalThis.YouTubeAdAccelerator) return;
-  const rates = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.25, 3, 4];
+  // The selector offers 0.25× through 4× in 0.05× steps.
+  const selectableRate = rate => typeof rate === "number" && rate >= 0.25 && rate <= 4
+    && Math.abs(rate * 20 - Math.round(rate * 20)) < 1e-6;
   const documentId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
   let enabled = false;
   let suspended = false;
@@ -244,7 +246,8 @@
     setSuspended(value) { appSuspended = value === true; reconcile(); },
     setContentRate(rate, expectedContext) {
       reconcile(); // Reject commands that raced URL navigation or a hidden/removed player.
-      if (!rates.includes(rate)) return { accepted: false, error: "invalid-rate" };
+      if (!selectableRate(rate)) return { accepted: false, error: "invalid-rate" };
+      rate = Math.round(rate * 20) / 20;
       if (!context() || expectedContext !== context()) return { accepted: false, error: "stale-context" };
       if (shorts() || !normalVideo()) return { accepted: false, error: "unavailable" };
       const temporary = holding();

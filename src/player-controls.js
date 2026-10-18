@@ -1,6 +1,6 @@
 // Page geometry and player-control visibility belong here; the native host owns the selector.
 (() => {
-  globalThis.YouTubePlayerControls = function (controller, openSelector, savePosition = () => {}) {
+  globalThis.YouTubePlayerControls = function (controller, openSelector, savePosition = () => {}, controlsChanged = () => {}) {
     const host = document.createElement("div");
     const shadow = host.attachShadow({ mode: "closed" });
     const button = document.createElement("button");
@@ -28,6 +28,28 @@
       }
       return true;
     }
+    // m.youtube.com draws its controls in an overlay outside the player; the chip shows and hides with it.
+    let observedOverlay = null;
+    let reportedControls;
+    const overlayObserver = globalThis.MutationObserver ? new MutationObserver(() => paint()) : null;
+    // Null when YouTube's overlay is absent; the fullscreen button then falls back to its own timer.
+    function controlsShown() {
+      const overlay = mobileControls();
+      return overlay ? mobileControlsVisible(overlay) : null;
+    }
+    function mobileControls() {
+      const overlay = document.querySelector?.("#player-control-overlay") ?? null;
+      if (overlay !== observedOverlay && overlayObserver) {
+        overlayObserver.disconnect();
+        if (overlay) overlayObserver.observe(overlay, { attributes: true, attributeFilter: ["class"] });
+      }
+      observedOverlay = overlay;
+      return overlay;
+    }
+    function mobileControlsVisible(overlay) {
+      const content = overlay.querySelector(".player-controls-content");
+      return Boolean(content) && getComputedStyle(content).visibility !== "hidden";
+    }
     function hide() { cancelDrag(); host.style.display = "none"; }
     function clamp(value) { return Math.min(1, Math.max(0, value)); }
     function chipSize() {
@@ -41,6 +63,8 @@
         top: rect.top + position.y * Math.max(0, rect.height - height) };
     }
     function paint() {
+      const shown = controlsShown();
+      if (shown !== reportedControls) { reportedControls = shown; controlsChanged(shown); }
       const selected = controller.getPlayer();
       const url = new URL(location.href);
       const videoOpen = (url.pathname === "/watch" && url.searchParams.has("v"))
@@ -56,7 +80,9 @@
       if (!host.isConnected) document.documentElement.append(host);
       const controlsHidden = player.classList.contains("ytp-autohide")
         || player.classList.contains("ytp-hide-controls");
-      const visible = drag?.active || video.paused || video.ended || Date.now() < revealedUntil || button.matches(":focus-visible") || (!controlsHidden && controlsVisible(player));
+      const overlay = mobileControls();
+      const visible = drag?.active || button.matches(":focus-visible") || (overlay ? mobileControlsVisible(overlay)
+        : video.paused || video.ended || Date.now() < revealedUntil || (!controlsHidden && controlsVisible(player)));
       host.style.display = "block";
       host.style.opacity = visible ? "1" : "0";
       host.style.pointerEvents = visible ? "auto" : "none";
@@ -145,6 +171,7 @@
         button.setAttribute("aria-label", rejected ? "Speed unavailable" : `Playback speed ${state.contentRate}×`);
         paint();
       },
+      controlsShown,
       setPosition(x, y) {
         position = x == null ? null : { x: clamp(x), y: clamp(y) };
         paint();

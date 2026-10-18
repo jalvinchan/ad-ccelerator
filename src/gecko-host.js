@@ -18,7 +18,7 @@
       videoContext, revision, url: location.href });
   }, (x, y) => {
     if (port && !paused && !document.hidden) port.postMessage({ type: "chip-position", x, y, revision, url: location.href });
-  });
+  }, () => { if (port) report(); });
 
   function apply() {
     const suspended = paused || document.hidden;
@@ -33,7 +33,8 @@
     controls.update(state, !paused && !document.hidden);
     const { enabled, adActive, rate, contentRate, contentAppliedRate, contentError, videoContext, contentSpeedAvailable } = state;
     port.postMessage({ type: "status", enabled, adActive, rate, contentRate,
-      contentAppliedRate, contentError, videoContext, contentSpeedAvailable, url: location.href, revision, paused });
+      contentAppliedRate, contentError, videoContext, contentSpeedAvailable, url: location.href, revision, paused,
+      controlsVisible: controls.controlsShown() });
   }
 
   function disconnect() {

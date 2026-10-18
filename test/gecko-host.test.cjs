@@ -14,17 +14,19 @@ function host(url = 'https://m.youtube.com/watch?v=fixture', framed = false) {
   const context = vm.createContext({
     URL,
     location: { href: url, origin: new URL(url).origin },
-    YouTubePlayerControls(controller, open, save) {
+    YouTubePlayerControls(controller, open, save, changed) {
       state.openSelector = open;
       state.savePosition = save;
       state.positions = [];
-      return { update() {}, hide() {}, setPosition(...args) { state.positions.push(args); } };
+      state.controlsChanged = changed;
+      return { update() {}, hide() {}, controlsShown: () => state.controls ?? null,
+        setPosition(...args) { state.positions.push(args); } };
     },
     YouTubeAdAccelerator: {
       setEnabled(value) { state.enabled = value; effects.push(['enabled', value]); },
       setSuspended(value) { state.suspended = value; effects.push(['suspended', value]); },
       setContentRate(rate, context) { effects.push(['speed', rate, context]);
-        return context === 'current' && [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.25, 3, 4].includes(rate)
+        return context === 'current' && rate >= 0.25 && rate <= 4
           ? {accepted: true, pending: false} : {accepted: false, error: 'stale-context'}; },
       getStatus() { return { enabled: state.enabled, adActive: false, rate: null }; },
     },
@@ -171,4 +173,14 @@ test('chip position syncs both ways with typed fractions only', () => {
     current.send({ type: 'chip-position', x, y });
   }
   assert.deepEqual(current.state.positions.map(args => JSON.parse(JSON.stringify(args))), [[0.5, 0], [null]]);
+});
+
+test('status carries YouTube control visibility and reports promptly when it changes', () => {
+  const current = host();
+  current.send(active(4));
+  assert.equal(current.effects.at(-1)[1].controlsVisible, null);
+  current.state.controls = true;
+  current.state.controlsChanged(true);
+  assert.equal(current.effects.at(-1)[1].type, 'status');
+  assert.equal(current.effects.at(-1)[1].controlsVisible, true);
 });

@@ -7,6 +7,7 @@ const code = readFileSync(require.resolve('../src/player-controls.js'), 'utf8');
 function controls() {
   let time = 0;
   const timers = new Map();
+  const observers = [];
   const elements = [];
   const events = new Map();
   const make = () => {
@@ -24,12 +25,14 @@ function controls() {
   const player = { isConnected: true, classList: { contains: () => false },
     querySelector: () => null, contains: target => target === video };
   const video = { isConnected: true, paused: false, getBoundingClientRect: () => rect };
-  const document = { documentElement: make(), hidden: false, fullscreenElement: null,
+  const document = { documentElement: make(), hidden: false, fullscreenElement: null, overlay: null,
+    querySelector(selector) { return selector === '#player-control-overlay' ? this.overlay : null; },
     createElement() { const element = make(); elements.push(element); return element; },
     addEventListener(type, callback) { events.set(type, callback); } };
   const location = {href:"https://m.youtube.com/watch?v=fixture"};
   const context = vm.createContext({ URL, location, document, innerWidth: 360, innerHeight: 640,
-    Date: { now: () => time }, Math,
+    Date: { now: () => time }, Math, getComputedStyle: element => element.style,
+    MutationObserver: class { constructor(callback) { observers.push(callback); } observe() {} disconnect() {} },
     setTimeout(callback) { const id = timers.size + 1; timers.set(id, callback); return id; },
     clearTimeout(id) { timers.delete(id); },
     addEventListener(type, callback) { events.set(type, callback); } });
@@ -39,7 +42,7 @@ function controls() {
   const ui = context.YouTubePlayerControls({ getPlayer: () => ({ player, video }) }, value => requests.push(value),
     (x, y) => saved.push([x, y]));
   const state = { videoContext: 'first', contentRate: 2.25, contentAppliedRate: 2.25, contentError: null };
-  return { ui, state, location, host: elements[0], button: elements[1], requests, saved, video, rect, document, events,
+  return { ui, state, location, observers, host: elements[0], button: elements[1], requests, saved, video, rect, document, events,
     hold() { const pending = [...timers.values()]; timers.clear(); pending.forEach(callback => callback()); },
     tick(value) { time = value; ui.update(state, true); } };
 }
@@ -133,4 +136,20 @@ test('long-press drags the chip freely, snaps it inside the video, saves it and 
   assert.deepEqual([current.host.style.left, current.host.style.top], ['156px', '40px']);
   current.ui.setPosition(null);
   assert.equal(current.host.style.left, '244px');
+});
+
+test('on mobile YouTube the chip shows and hides with the player control overlay', () => {
+  const current = controls();
+  const content = { style: { visibility: 'hidden' } };
+  current.document.overlay = { querySelector: () => content };
+  current.video.paused = true;
+  current.tick(0);
+  assert.equal(current.host.style.opacity, '0'); // Follows YouTube, not the pause or reveal timer.
+  content.style.visibility = 'visible';
+  current.observers[0]();
+  assert.equal(current.host.style.opacity, '1');
+  content.style.visibility = 'hidden';
+  current.observers[0]();
+  assert.equal(current.host.style.opacity, '0');
+  assert.equal(current.button.tabIndex, -1);
 });

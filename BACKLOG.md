@@ -1,18 +1,15 @@
 # Backlog
 
 Open work only, in suggested order. Current implementation and completed work are
-in [README.md](README.md); measured results are in [Verification](docs/VERIFICATION.md).
+in [README.md](README.md).
 
-1. [ ] **Implement selected speed-control design.** The user chose **slider + fine
-   adjustment**: a 0.25×–4× slider with whole-speed labels, an exact rate readout,
-   and ±0.05× buttons. Use the same design in normal and fullscreen modes.
-2. [ ] **Transcript search and download.** Search available transcript text and
+1. [ ] **Transcript search and download.** Search available transcript text and
    jump to a spoken passage; allow downloading the available transcript.
    Explore YouTube's existing transcript support first. Decide export format
    and behavior when a transcript is unavailable before implementation.
-3. [ ] **Touch lock.** Prevent accidental taps while watching, with an obvious,
+2. [ ] **Touch lock.** Prevent accidental taps while watching, with an obvious,
    accessible unlock control and a reliable way to exit.
-4. [ ] **Seek interval.** Allow choosing a jump interval, such as 5, 10, or
+3. [ ] **Seek interval.** Allow choosing a jump interval, such as 5, 10, or
    30 seconds, while preserving YouTube's native gestures and ad safeguards.
 
 Video bookmarks and sleep timer are not planned.
