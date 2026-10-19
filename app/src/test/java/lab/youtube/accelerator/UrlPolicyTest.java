@@ -28,4 +28,16 @@ public class UrlPolicyTest {
             "https://", "http://example.com/", "intent://example.com/", null
         }) assertFalse(url, UrlPolicy.browsableHttps(url));
     }
+
+    @Test public void onlyVideoPagesOpenInThePlayerLayer() {
+        for (String url : new String[] {
+            "https://m.youtube.com/watch?v=abc", "https://www.youtube.com/watch?feature=share&v=abc&list=PL1",
+            "https://m.youtube.com/live/abc", "https://m.youtube.com/live/abc/"
+        }) assertTrue(url, UrlPolicy.watch(url));
+        for (String url : new String[] {
+            "https://m.youtube.com/", "https://m.youtube.com/watch", "https://m.youtube.com/watch?v=",
+            "https://m.youtube.com/watch?vv=abc", "https://m.youtube.com/shorts/abc", "https://m.youtube.com/live",
+            "https://m.youtube.com/@channel", "https://example.com/watch?v=abc", "http://m.youtube.com/watch?v=abc", null
+        }) assertFalse(url, UrlPolicy.watch(url));
+    }
 }

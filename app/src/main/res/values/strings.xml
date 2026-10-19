@@ -27,4 +27,9 @@
     <string name="seek_flash_forward">+%1$d s</string>
     <string name="seek_back_description" tools:ignore="PluralsCandidate">Back %1$d seconds</string>
     <string name="seek_forward_description" tools:ignore="PluralsCandidate">Forward %1$d seconds</string>
+    <string name="expand_player">Expand player</string>
+    <string name="close_player">Close player</string>
+    <string name="play_video">Play</string>
+    <string name="pause_video">Pause</string>
+    <string name="close_player_symbol" translatable="false">✕</string>
 </resources>

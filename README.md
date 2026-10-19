@@ -5,7 +5,8 @@ WebExtension that temporarily accelerates detected YouTube ads. Playback and
 acceleration run inside the same app and browser profile. Firefox does not need
 to be installed. This replaces the Android WebView prototype in commit `a117335`.
 
-**Experimental:** 0.4.9 passes Samsung normal-video native hold restoration
+**Experimental:** 0.6.3 adds a separate player layer and mini player. It has
+not been tested on a device yet. 0.4.9 passes Samsung normal-video native hold restoration
 and both speed-menu checks. Real-ad restoration was observed at 1×. Shorts
 hold-to-2× is human-verified. Earlier 0.4.1 passed controlled emulator
 acceptance. The user confirms
@@ -16,7 +17,17 @@ Google’s sign-in form opens in-app; completion has not been tested.
 
 Normal mode has no native toolbar: use YouTube’s Home navigation and pull down
 from the top of the page to reload. A Reload button appears for page/browser
-errors. A circular arrow follows the pull, turns teal and gives haptic feedback
+errors. Videos open in a player layer above the page you were browsing, as in
+YouTube's own app. The page underneath stays exactly as it was, including its
+scroll position and feed. Back shrinks the player to a mini player above
+YouTube's bottom bar, and the video keeps playing. Drag the mini player
+anywhere; it settles in the nearest corner, which is kept across restarts. A
+sideways flick toward the other side or a downward flick picks the corner it
+points to, and a quick upward flick expands it. A sideways flick toward the
+edge it already sits on, or a drag mostly off that edge, closes it. Tap it to expand it, use its top-left button to play or pause, or tap ✕ to close it. A video opened from the player replaces the
+current one rather than stacking. A channel or other page opened from the
+player loads underneath, and the player shrinks. Shorts stay in the feed.
+A circular arrow follows the pull, turns teal and gives haptic feedback
 at the release threshold, then spins until loading finishes and animates back.
 A small speed chip sits near the video’s upper-right corner on open
 videos and shows and hides with YouTube’s own player controls, in normal and
@@ -35,7 +46,7 @@ Shorts and homepage previews receive no default content-speed writes; Shorts hav
 no app selector and YouTube owns their content speed. Ad restoration still applies.
 YouTube provides its own search suggestions and history; the app adds no separate
 search history. HTTPS links remain in the app, including sign-in and help pages.
-New-window links open in the same tab. The extension runs only on exact HTTPS
+New-window links open in the matching layer; there are no tabs. The extension runs only on exact HTTPS
 `m.youtube.com` and `www.youtube.com` origins.
 
 The shared controller tries 16×, 8×, then 4× during detected ads and restores the

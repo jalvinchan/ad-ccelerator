@@ -40,6 +40,7 @@ function host(url = 'https://m.youtube.com/watch?v=fixture', framed = false) {
     addEventListener: (type, callback) => pageEvents.set(type, callback),
     setInterval(callback) { const id = intervals.size + 1; intervals.set(id, callback); return id; },
     clearInterval(id) { intervals.delete(id); },
+    setTimeout() { return 0; },
     browser: { runtime: { connectNative(name) {
       assert.equal(name, 'accelerator');
       const connection = {
@@ -59,6 +60,8 @@ function host(url = 'https://m.youtube.com/watch?v=fixture', framed = false) {
     context, state, effects, connections, intervals,
     send(message) { connections.at(-1).receive(message); },
     page(type) { pageEvents.get(type)(); },
+    pageListener(type) { return pageEvents.get(type); },
+    documentListener(type) { return documentEvents.get(type); },
     visibility(hidden) { context.document.hidden = hidden; documentEvents.get('visibilitychange')(); },
   };
 }
@@ -237,3 +240,136 @@ test('unchanged status is resent only as a five-second heartbeat', () => {
   assert.equal(statuses(), before + 2); // A change is sent at once.
 });
 
+
+test('links are rerouted between layers only after the host names this page\'s layer', () => {
+  const click = (current, href, extra = {}) => {
+    const event = { button: 0, defaultPrevented: false, target: { closest: () => ({ href }) },
+      preventDefault() { this.defaultPrevented = true; }, stopImmediatePropagation() {}, ...extra };
+    current.context.click(event);
+    return event.defaultPrevented;
+  };
+  const browse = host('https://m.youtube.com/');
+  browse.context.click = event => browse.pageListener('click')(event);
+  browse.send(active(1));
+  assert.equal(click(browse, 'https://m.youtube.com/watch?v=abc'), false); // No layer named yet.
+  browse.send({ type: 'layer', watch: false, mini: false });
+  browse.effects.length = 0;
+  assert.equal(click(browse, 'https://m.youtube.com/watch?v=abc'), true);
+  assert.deepEqual(browse.effects.at(-1)[1], { type: 'open-watch', target: 'https://m.youtube.com/watch?v=abc',
+    revision: 1, url: 'https://m.youtube.com/' });
+  for (const href of ['https://m.youtube.com/shorts/abc', 'https://m.youtube.com/@channel', 'https://www.youtube.com/watch?v=abc'])
+    assert.equal(click(browse, href), false, href);
+  assert.equal(click(browse, 'https://m.youtube.com/watch?v=abc', { button: 1 }), false);
+
+  const watch = host('https://m.youtube.com/watch?v=one');
+  watch.context.click = event => watch.pageListener('click')(event);
+  watch.send(active(4));
+  watch.send({ type: 'layer', watch: true, mini: false });
+  watch.effects.length = 0;
+  for (const href of ['https://m.youtube.com/watch?v=two', 'https://m.youtube.com/watch?v=one#comments'])
+    assert.equal(click(watch, href), false, href);
+  assert.equal(click(watch, 'https://m.youtube.com/@channel'), true);
+  assert.deepEqual(watch.effects.at(-1)[1], { type: 'open-browse', target: 'https://m.youtube.com/@channel',
+    revision: 4, url: 'https://m.youtube.com/watch?v=one' });
+  watch.send({ ...active(5), paused: true });
+  assert.equal(click(watch, 'https://m.youtube.com/@channel'), false); // Paused pages never navigate.
+});
+
+test('mini layer hides the in-page chip and applies the mini player style', () => {
+  const classes = new Set();
+  const appended = [];
+  const current = host();
+  Object.assign(current.context.document, {
+    documentElement: { classList: { toggle: (name, on) => on ? classes.add(name) : classes.delete(name),
+      remove: name => classes.delete(name) } },
+    head: { append: node => appended.push(node) },
+    getElementById: id => appended.find(node => node.id === id) ?? null,
+    createElement: () => ({}),
+  });
+  current.send(active(1));
+  current.send({ type: 'layer', watch: true, mini: true });
+  assert.equal(classes.has('yt-accelerator-mini'), true);
+  assert.equal(appended.length, 1);
+  current.send({ type: 'layer', watch: true, mini: false });
+  current.send({ type: 'layer', watch: true, mini: true });
+  assert.equal(appended.length, 1);
+  current.send({ type: 'layer', watch: false, mini: true }); // Only the player layer can be mini.
+  assert.equal(classes.has('yt-accelerator-mini'), false);
+  current.send({ type: 'layer', watch: true, mini: true });
+  current.connections[0].disconnect();
+  assert.equal(classes.has('yt-accelerator-mini'), false);
+});
+
+test('mini player play/pause commands need the live revision and the mini layer; status carries playback', () => {
+  const current = host();
+  const video = { paused: false, ended: false, play() { this.paused = false; current.effects.push(['play']); },
+    pause() { this.paused = true; current.effects.push(['paused']); } };
+  current.context.YouTubeAdAccelerator.getPlayer = () => ({ video });
+  current.send(active(2));
+  assert.equal(current.effects.filter(effect => effect[0] === 'report').at(-1)[1].playing, true);
+  current.send({ type: 'layer', watch: true, mini: false });
+  current.effects.length = 0;
+  current.send({ type: 'playback', play: false, revision: 2 }); // Full player: YouTube's own controls only.
+  assert.equal(video.paused, false);
+  current.send({ type: 'layer', watch: true, mini: true });
+  for (const message of [{ type: 'playback', play: false, revision: 1 }, { type: 'playback', play: 'no', revision: 2 }])
+    current.send(message);
+  assert.equal(video.paused, false);
+  current.send({ type: 'playback', play: false, revision: 2 });
+  assert.equal(video.paused, true);
+  current.send({ type: 'playback', play: true, revision: 2 });
+  assert.equal(video.paused, false);
+});
+
+test('a video playing when the player changes size is resumed if the resize pauses it', () => {
+  const current = host();
+  const timers = [];
+  current.context.setTimeout = callback => timers.push(callback);
+  const video = { paused: false, ended: false, play() { this.paused = false; current.effects.push(['play']); } };
+  current.context.YouTubeAdAccelerator.getPlayer = () => ({ video });
+  current.send(active(1));
+  current.send({ type: 'layer', watch: true, mini: false });
+  current.send({ type: 'layer', watch: true, mini: true });
+  video.paused = true;
+  current.effects.length = 0;
+  current.documentListener('pause')({ target: video });
+  assert.deepEqual(current.effects[0], ['play']);
+  video.paused = true;
+  timers.forEach(callback => callback());
+  assert.equal(video.paused, false);
+});
+
+test('mini player playback goes through YouTube\'s player API when it exists, so YouTube does not re-pause it', () => {
+  const current = host();
+  const calls = [];
+  const video = { paused: true, ended: false, play() { calls.push('video.play'); }, pause() { calls.push('video.pause'); } };
+  const api = { playVideo() { calls.push('playVideo'); }, pauseVideo() { calls.push('pauseVideo'); } };
+  current.context.YouTubeAdAccelerator.getPlayer = () => ({ video, player: { wrappedJSObject: api } });
+  current.send(active(1));
+  current.send({ type: 'layer', watch: true, mini: true });
+  current.send({ type: 'playback', play: true, revision: 1 });
+  current.send({ type: 'playback', play: false, revision: 1 });
+  assert.deepEqual(calls, ['playVideo', 'pauseVideo']);
+});
+
+test('a tapped video autoplays once in a fresh player page; a page that already played ignores the request', () => {
+  const fresh = host();
+  const calls = [];
+  const api = { playVideo() { calls.push('playVideo'); } };
+  fresh.context.YouTubeAdAccelerator.getPlayer = () => ({ video: { paused: true }, player: { wrappedJSObject: api } });
+  fresh.send(active(1));
+  fresh.send({ type: 'layer', watch: true, mini: false, autoplay: true });
+  assert.deepEqual(calls, ['playVideo']);
+  fresh.documentListener('play')({ target: {} });
+  fresh.documentListener('canplay')();
+  assert.deepEqual(calls, ['playVideo']); // Played once; YouTube owns it from here.
+
+  const old = host();
+  const oldCalls = [];
+  old.context.YouTubeAdAccelerator.getPlayer = () => ({ video: { paused: false },
+    player: { wrappedJSObject: { playVideo() { oldCalls.push('playVideo'); } } } });
+  old.send(active(1));
+  old.documentListener('play')({ target: {} });
+  old.send({ type: 'layer', watch: true, mini: false, autoplay: true });
+  assert.deepEqual(oldCalls, []);
+});

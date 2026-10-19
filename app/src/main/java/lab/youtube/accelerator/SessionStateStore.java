@@ -9,6 +9,7 @@ import java.nio.file.StandardCopyOption;
 /** Keeps GeckoView's session state out of the Binder-limited saved-instance Bundle. */
 final class SessionStateStore {
     static final String FILE_NAME = "session-state.json";
+    static final String WATCH_FILE_NAME = "watch-state.json";
 
     /** Writes atomically (temp file + rename). Throws on I/O failure. */
     static void save(File file, String state) throws IOException {

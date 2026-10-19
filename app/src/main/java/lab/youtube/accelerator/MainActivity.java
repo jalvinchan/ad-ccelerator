@@ -22,6 +22,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.util.TypedValue;
 import android.view.HapticFeedbackConstants;
+import android.view.VelocityTracker;
 import android.view.View;
 import android.view.ViewConfiguration;
 import android.view.MotionEvent;
@@ -32,6 +33,8 @@ import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.widget.Button;
 import android.widget.FrameLayout;
+import android.widget.ImageButton;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
@@ -53,7 +56,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.List;
 
-/** Single-session HTTPS browser with one bundled accelerator extension. */
+/** HTTPS browser with one bundled accelerator extension: a browse page and a video player layer above it. */
 public final class MainActivity extends Activity {
     private static final String HOME = "https://m.youtube.com/";
     private static final String EXTENSION_ID = "accelerator@ad-ccelerator.local";
@@ -61,30 +64,46 @@ public final class MainActivity extends Activity {
     private static final int SPEED_BUTTON_HEIGHT_DP = 48;
     private static final int SEEK_BUTTON_WIDTH_DP = 48;
     private static final int CHIP_DIVIDER_DP = 1;
+    // Keeps the mini player clear of YouTube's bottom navigation bar.
+    private static final int MINI_BOTTOM_MARGIN_DP = 64;
+    private static final int MINI_MARGIN_DP = 12;
+    // A release faster than this is a flick: it picks the mini player's corner, or expands it when upward.
+    private static final int MINI_FLICK_DP_PER_S = 800;
     private static final int CHIP_WIDTH_DP = SEEK_BUTTON_WIDTH_DP * 2 + SPEED_BUTTON_WIDTH_DP + CHIP_DIVIDER_DP * 2;
     // GeckoRuntime may only be created once per process; sessions belong to activities.
     private static GeckoRuntime runtime;
     private final Handler handler = new Handler(Looper.getMainLooper());
-    private GeckoSession session;
     private GeckoView web;
+    private GeckoView watchView;
     private FrameLayout root;
+    private FrameLayout watchFrame;
+    private GradientDrawable watchBackground;
+    private FrameLayout stage;
+    private View miniOverlay;
+    private ImageButton miniPlay;
+    private Button miniClose;
     private LinearLayout controls;
     private TextView status;
-    private WebExtension.Port port;
-    private GeckoSession.SessionState sessionState;
-    private String currentUrl = HOME;
+    private WebExtension extension;
+    private Layer browse;
+    // The video player above the browse page, like YouTube's own app; null while closed.
+    private Layer watch;
+    private boolean mini;
+    // Mini player corner: bit 0 is right, bit 1 is bottom.
+    private int miniCorner = 3;
+    private boolean draggingMini;
+    private VelocityTracker miniVelocity;
+    private float miniRawX;
+    private float miniRawY;
+    private float miniStartX;
+    private float miniStartY;
     private boolean paused = true;
-    private boolean canGoBack;
     private boolean fullscreen;
     private boolean extensionReady;
-    private boolean loadFailed;
     private int previousSystemUiVisibility;
-    private int revision;
     private int previousOrientation;
     private Button reloadButton;
     private RefreshIndicator refreshIndicator;
-    private float scrollY;
-    private boolean scrollKnown;
     private boolean pulling;
     private float pullX;
     private float pullY;
@@ -130,9 +149,42 @@ public final class MainActivity extends Activity {
     private final Runnable hideSeekFlash = () ->
         seekFlash.animate().alpha(0).setDuration(150).withEndAction(() -> seekFlash.setVisibility(View.GONE));
 
-    private final Runnable suspendSession = () -> {
-        if (paused && session != null && session.isOpen()) session.setActive(false);
-    };
+    /** One page surface with its own session, extension port and history. */
+    private final class Layer {
+        final boolean isWatch;
+        final GeckoView view;
+        final GeckoSession session = new GeckoSession(new GeckoSessionSettings.Builder()
+            .suspendMediaWhenInactive(true).build());
+        final Runnable suspend = () -> { if (paused && session.isOpen()) session.setActive(false); };
+        WebExtension.Port port;
+        GeckoSession.SessionState sessionState;
+        String currentUrl = HOME;
+        boolean canGoBack;
+        boolean loadFailed;
+        int revision;
+        float scrollY;
+        boolean scrollKnown;
+        boolean playing;
+        // Set when a tap opens a video; the new page plays it once loaded, as YouTube's own navigation would.
+        boolean autoplay;
+
+        Layer(boolean isWatch, GeckoView view) {
+            this.isWatch = isWatch;
+            this.view = view;
+            installDelegates(this);
+            session.open(runtime);
+            view.setSession(session);
+            if (extension != null) connectExtension(this);
+        }
+    }
+
+    /** The layer in view; the speed chip, pull-to-refresh and error banner follow it. */
+    private Layer front() { return watch != null && !mini ? watch : browse; }
+
+    private Layer[] layers() { return watch == null ? new Layer[] {browse} : new Layer[] {browse, watch}; }
+
+    // The browse page sleeps while the full player covers it; the player keeps playing as the mini player.
+    private boolean shown(Layer layer) { return layer.isWatch || watch == null || mini; }
 
     @Override public void onCreate(Bundle savedState) {
         super.onCreate(savedState);
@@ -140,11 +192,15 @@ public final class MainActivity extends Activity {
         getPreferences(MODE_PRIVATE).edit().remove("enabled").remove("searchHistory").apply();
         chipX = getPreferences(MODE_PRIVATE).getFloat("speedChipX", -1);
         chipY = getPreferences(MODE_PRIVATE).getFloat("speedChipY", -1);
+        miniCorner = getPreferences(MODE_PRIVATE).getInt("miniCorner", 3) & 3;
         int savedSeek = getPreferences(MODE_PRIVATE).getInt("seekInterval", 10);
         seekInterval = NativeProtocol.seekInterval(savedSeek) ? savedSeek : 10;
         buildUi();
         // A file left by a crash or killed process must not resurface on a later cold start.
-        if (savedState == null) SessionStateStore.clear(sessionStateFile());
+        if (savedState == null) {
+            SessionStateStore.clear(stateFile(SessionStateStore.FILE_NAME));
+            SessionStateStore.clear(stateFile(SessionStateStore.WATCH_FILE_NAME));
+        }
         if (Build.VERSION.SDK_INT >= 33) {
             getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
                 OnBackInvokedDispatcher.PRIORITY_DEFAULT, this::handleBack);
@@ -161,52 +217,58 @@ public final class MainActivity extends Activity {
                 .build();
             runtime = GeckoRuntime.create(getApplicationContext(), settings);
         }
-        session = new GeckoSession(new GeckoSessionSettings.Builder()
-            .suspendMediaWhenInactive(true).build());
-        installDelegates();
-        session.open(runtime);
-        web.setSession(session);
+        browse = new Layer(false, web);
         runtime.getWebExtensionController().ensureBuiltIn(
-            "resource://android/assets/accelerator/", EXTENSION_ID).accept(extension -> {
+            "resource://android/assets/accelerator/", EXTENSION_ID).accept(installed -> {
                 if (isDestroyed()) return;
-                session.getWebExtensionController().setMessageDelegate(extension, new WebExtension.MessageDelegate() {
-                    @Override public void onConnect(WebExtension.Port connection) {
-                        WebExtension.MessageSender sender = connection.sender;
-                        if (isDestroyed() || sender.session != session || !sender.isTopLevel()
-                            || sender.environmentType != WebExtension.MessageSender.ENV_TYPE_CONTENT_SCRIPT
-                            || !EXTENSION_ID.equals(sender.webExtension.id)
-                            || !UrlPolicy.trusted(sender.url) || !"accelerator".equals(connection.name)) {
-                            connection.disconnect();
-                            return;
-                        }
-                        if (port != null) port.disconnect();
-                        port = connection;
-                        connection.setDelegate(new WebExtension.PortDelegate() {
-                            @Override public void onPortMessage(Object message, WebExtension.Port source) {
-                                receiveMessage(message, source);
-                            }
-                            @Override public void onDisconnect(WebExtension.Port source) {
-                                if (port == source) {
-                                    port = null;
-                                    resetContentControls();
-                                }
-                            }
-                        });
-                        applyState();
-                        sendChipPosition();
-                        sendSeekInterval();
-                    }
-                }, "accelerator");
+                extension = installed;
+                connectExtension(browse);
                 extensionReady = true;
                 if (savedState != null && savedState.getBoolean("browserStateSaved")) {
-                    String saved = SessionStateStore.take(sessionStateFile());
-                    if (saved != null) sessionState = GeckoSession.SessionState.fromString(saved);
+                    String saved = SessionStateStore.take(stateFile(SessionStateStore.FILE_NAME));
+                    if (saved != null) browse.sessionState = GeckoSession.SessionState.fromString(saved);
                 }
-                if (sessionState != null) session.restoreState(sessionState);
-                else session.loadUri(HOME);
+                if (browse.sessionState != null) browse.session.restoreState(browse.sessionState);
+                else browse.session.loadUri(HOME);
+                if (savedState != null && savedState.getBoolean("watchStateSaved")) {
+                    String saved = SessionStateStore.take(stateFile(SessionStateStore.WATCH_FILE_NAME));
+                    if (saved != null) openWatch(null, GeckoSession.SessionState.fromString(saved), savedState.getBoolean("watchMini"));
+                }
             }, error -> {
                 if (!isDestroyed()) showError(R.string.assets_unavailable);
             });
+    }
+
+    private void connectExtension(Layer layer) {
+        layer.session.getWebExtensionController().setMessageDelegate(extension, new WebExtension.MessageDelegate() {
+            @Override public void onConnect(WebExtension.Port connection) {
+                WebExtension.MessageSender sender = connection.sender;
+                if (isDestroyed() || sender.session != layer.session || !sender.isTopLevel()
+                    || sender.environmentType != WebExtension.MessageSender.ENV_TYPE_CONTENT_SCRIPT
+                    || !EXTENSION_ID.equals(sender.webExtension.id)
+                    || !UrlPolicy.trusted(sender.url) || !"accelerator".equals(connection.name)) {
+                    connection.disconnect();
+                    return;
+                }
+                if (layer.port != null) layer.port.disconnect();
+                layer.port = connection;
+                connection.setDelegate(new WebExtension.PortDelegate() {
+                    @Override public void onPortMessage(Object message, WebExtension.Port source) {
+                        receiveMessage(message, layer, source);
+                    }
+                    @Override public void onDisconnect(WebExtension.Port source) {
+                        if (layer.port == source) {
+                            layer.port = null;
+                            if (layer == front()) resetContentControls();
+                        }
+                    }
+                });
+                sendLayer(layer);
+                applyState(layer);
+                sendChipPosition(layer);
+                sendSeekInterval(layer);
+            }
+        }, "accelerator");
     }
 
     // Page listener is observer only; the speed button's drag listener still lets taps reach its click handler.
@@ -241,39 +303,59 @@ public final class MainActivity extends Activity {
         status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
         status.setVisibility(View.GONE);
         controls.addView(status);
+        stage = new FrameLayout(this);
+        browser.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1));
         web = new GeckoView(this);
-        browser.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
-        web.setOnTouchListener((view, event) -> {
-            switch (event.getActionMasked()) {
-                case MotionEvent.ACTION_DOWN:
-                    if (fullscreen) revealSpeedButton();
-                    pulling = pageAtTop() && !fullscreen && !paused && !loadFailed
-                        && !refreshIndicator.isLoading();
-                    pullX = event.getX();
-                    pullY = event.getY();
-                    break;
-                case MotionEvent.ACTION_MOVE:
-                    if (event.getPointerCount() != 1 || !pageAtTop()
-                        || Math.abs(event.getX() - pullX) > dp(32) || event.getY() < pullY) pulling = false;
-                    if (pulling) refreshIndicator.drag(event.getY() - pullY);
-                    else refreshIndicator.release();
-                    break;
-                case MotionEvent.ACTION_UP:
-                    boolean refresh = pulling && event.getY() - pullY >= dp(96);
-                    pulling = false;
-                    if (refresh) {
-                        refreshIndicator.startLoading();
-                        handler.post(this::reloadPage);
-                    } else refreshIndicator.release();
-                    break;
-                case MotionEvent.ACTION_POINTER_DOWN:
-                case MotionEvent.ACTION_CANCEL:
-                    cancelPull();
-                    break;
-                default: break;
-            }
-            return false; // Gecko keeps ownership of scrolling and player gestures.
+        stage.addView(web, new FrameLayout.LayoutParams(-1, -1));
+        web.setOnTouchListener(this::pullToRefresh);
+        watchFrame = new FrameLayout(this);
+        watchBackground = new GradientDrawable();
+        watchBackground.setColor(Color.BLACK);
+        watchFrame.setBackground(watchBackground);
+        watchFrame.setClipToOutline(true);
+        watchView = new GeckoView(this);
+        // A texture, unlike a surface, stacks above the browse page's surface and clips to the mini player's corners.
+        watchView.setViewBackend(GeckoView.BACKEND_TEXTURE_VIEW);
+        watchView.setOnTouchListener(this::pullToRefresh);
+        watchFrame.addView(watchView, new FrameLayout.LayoutParams(-1, -1));
+        // The mini player is one tap target; the page inside it gets no touches.
+        miniOverlay = new View(this);
+        miniOverlay.setContentDescription(getString(R.string.expand_player));
+        miniOverlay.setOnClickListener(view -> setMini(false));
+        miniOverlay.setOnTouchListener(this::dragMini);
+        watchFrame.addView(miniOverlay, new FrameLayout.LayoutParams(-1, -1));
+        miniPlay = new ImageButton(this);
+        miniPlay.setBackground(miniButtonBackground());
+        miniPlay.setScaleType(ImageView.ScaleType.CENTER);
+        miniPlay.setPadding(0, 0, 0, 0);
+        miniPlay.setOnClickListener(view -> togglePlayback());
+        FrameLayout.LayoutParams playParams = new FrameLayout.LayoutParams(dp(32), dp(32), Gravity.TOP | Gravity.START);
+        playParams.setMargins(dp(4), dp(4), 0, 0);
+        watchFrame.addView(miniPlay, playParams);
+        miniClose = new Button(this);
+        miniClose.setBackground(miniButtonBackground());
+        miniClose.setStateListAnimator(null);
+        miniClose.setMinWidth(0);
+        miniClose.setMinimumWidth(0);
+        miniClose.setMinHeight(0);
+        miniClose.setMinimumHeight(0);
+        miniClose.setPadding(0, 0, 0, 0);
+        miniClose.setText(R.string.close_player_symbol);
+        miniClose.setTextColor(Color.WHITE);
+        miniClose.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        miniClose.setContentDescription(getString(R.string.close_player));
+        miniClose.setOnClickListener(view -> closeWatch());
+        FrameLayout.LayoutParams closeParams = new FrameLayout.LayoutParams(dp(32), dp(32), Gravity.TOP | Gravity.END);
+        closeParams.setMargins(0, dp(4), dp(4), 0);
+        watchFrame.addView(miniClose, closeParams);
+        stage.addView(watchFrame);
+        stage.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            if (right - left == oldRight - oldLeft && bottom - top == oldBottom - oldTop) return;
+            // The mini player's page follows the stage size; relaid out after this pass.
+            if (watch != null && mini) handler.post(this::layoutWatch);
+            else placeMini(false);
         });
+        layoutWatch();
         refreshIndicator = new RefreshIndicator(this);
         root.addView(refreshIndicator, new FrameLayout.LayoutParams(dp(48), dp(48), Gravity.TOP | Gravity.CENTER_HORIZONTAL));
         browser.setFocusableInTouchMode(true);
@@ -324,6 +406,40 @@ public final class MainActivity extends Activity {
         fullscreenChip.setVisibility(View.GONE);
         updateSeekButtons();
         resetContentControls();
+    }
+
+    /** Observes the front layer only; Gecko keeps ownership of scrolling and player gestures. */
+    private boolean pullToRefresh(View view, MotionEvent event) {
+        if (browse == null || view != front().view) return false;
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                if (fullscreen) revealSpeedButton();
+                pulling = pageAtTop() && !fullscreen && !paused && !front().loadFailed
+                    && !refreshIndicator.isLoading();
+                pullX = event.getX();
+                pullY = event.getY();
+                break;
+            case MotionEvent.ACTION_MOVE:
+                if (event.getPointerCount() != 1 || !pageAtTop()
+                    || Math.abs(event.getX() - pullX) > dp(32) || event.getY() < pullY) pulling = false;
+                if (pulling) refreshIndicator.drag(event.getY() - pullY);
+                else refreshIndicator.release();
+                break;
+            case MotionEvent.ACTION_UP:
+                boolean refresh = pulling && event.getY() - pullY >= dp(96);
+                pulling = false;
+                if (refresh) {
+                    refreshIndicator.startLoading();
+                    handler.post(this::reloadPage);
+                } else refreshIndicator.release();
+                break;
+            case MotionEvent.ACTION_POINTER_DOWN:
+            case MotionEvent.ACTION_CANCEL:
+                cancelPull();
+                break;
+            default: break;
+        }
+        return false;
     }
 
     private void styleSegment(Button button) {
@@ -421,10 +537,12 @@ public final class MainActivity extends Activity {
         placeSpeedButton();
     }
 
-    private void sendChipPosition() {
-        if (port == null) return;
+    private void sendChipPosition() { for (Layer layer : layers()) sendChipPosition(layer); }
+
+    private void sendChipPosition(Layer layer) {
+        if (layer.port == null) return;
         try {
-            port.postMessage(new JSONObject().put("type", "chip-position")
+            layer.port.postMessage(new JSONObject().put("type", "chip-position")
                 .put("x", chipX < 0 ? JSONObject.NULL : chipX).put("y", chipY < 0 ? JSONObject.NULL : chipY));
         } catch (JSONException error) {
             throw new IllegalStateException(error);
@@ -451,20 +569,23 @@ public final class MainActivity extends Activity {
         sendSeekInterval();
     }
 
-    private void sendSeekInterval() {
-        if (port == null) return;
+    private void sendSeekInterval() { for (Layer layer : layers()) sendSeekInterval(layer); }
+
+    private void sendSeekInterval(Layer layer) {
+        if (layer.port == null) return;
         try {
-            port.postMessage(new JSONObject().put("type", "seek-interval").put("seconds", seekInterval));
+            layer.port.postMessage(new JSONObject().put("type", "seek-interval").put("seconds", seekInterval));
         } catch (JSONException error) {
             throw new IllegalStateException(error);
         }
     }
 
     private void sendSeek(int direction) {
-        if (port == null || videoContext == null || paused || !seekAvailable || !fullscreen) return;
+        Layer layer = front();
+        if (layer.port == null || videoContext == null || paused || !seekAvailable || !fullscreen) return;
         revealSpeedButton();
         try {
-            port.postMessage(new JSONObject().put("type", "seek").put("revision", revision)
+            layer.port.postMessage(new JSONObject().put("type", "seek").put("revision", layer.revision)
                 .put("videoContext", videoContext).put("seconds", direction * seekInterval));
             showSeekFlash(direction);
         } catch (JSONException error) {
@@ -496,7 +617,8 @@ public final class MainActivity extends Activity {
 
     private boolean pageAtTop() {
         // APZ can report subpixel rounding (including small negative values) at the top edge.
-        return scrollKnown && scrollY <= 1;
+        Layer layer = front();
+        return layer.scrollKnown && layer.scrollY <= 1;
     }
 
     private void cancelPull() {
@@ -510,25 +632,27 @@ public final class MainActivity extends Activity {
             refreshIndicator.finish();
             return;
         }
-        if (loadFailed) navigate(UrlPolicy.browsableHttps(currentUrl) ? currentUrl : HOME);
-        else session.reload();
+        Layer layer = front();
+        if (layer.loadFailed) navigate(layer, UrlPolicy.browsableHttps(layer.currentUrl) ? layer.currentUrl : HOME);
+        else layer.session.reload();
     }
 
-    private void installDelegates() {
+    private void installDelegates(Layer layer) {
+        GeckoSession session = layer.session;
         // Compositor updates include the initial viewport and asynchronous gesture scrolling.
         session.setCompositorScrollDelegate(new GeckoSession.CompositorScrollDelegate() {
             @Override public void onScrollChanged(GeckoSession source, GeckoSession.ScrollPositionUpdate position) {
-                scrollKnown = true;
-                scrollY = position.scrollY;
-                if (!pageAtTop()) cancelPull();
+                layer.scrollKnown = true;
+                layer.scrollY = position.scrollY;
+                if (layer == front() && !pageAtTop()) cancelPull();
             }
         });
         session.setNavigationDelegate(new GeckoSession.NavigationDelegate() {
             @Override public GeckoResult<AllowOrDeny> onLoadRequest(GeckoSession source, LoadRequest request) {
                 if (!UrlPolicy.browsableHttps(request.uri)) return GeckoResult.fromValue(AllowOrDeny.DENY);
-                // This app has one tab. Keep popup links in the same browser profile.
+                // There are no tabs. Keep popup links in the same browser profile.
                 if (request.target == TARGET_WINDOW_NEW) {
-                    handler.post(() -> navigate(request.uri));
+                    handler.post(() -> openUrl(request.uri));
                     return GeckoResult.fromValue(AllowOrDeny.DENY);
                 }
                 return GeckoResult.fromValue(AllowOrDeny.ALLOW);
@@ -536,33 +660,43 @@ public final class MainActivity extends Activity {
             @Override public void onLocationChange(GeckoSession source, String url,
                     List<GeckoSession.PermissionDelegate.ContentPermission> permissions, Boolean gesture) {
                 if (url == null) return;
-                resetContentControls();
-                currentUrl = url;
-                if (!loadFailed) status.setVisibility(View.GONE);
+                layer.currentUrl = url;
+                if (layer == front()) {
+                    resetContentControls();
+                    if (!layer.loadFailed) status.setVisibility(View.GONE);
+                }
+                // The page reroutes tapped links itself; this catches YouTube navigating without a link.
+                if (!layer.isWatch && UrlPolicy.watch(url)) handler.post(() -> moveToWatch(url));
+                else if (layer.isWatch && !UrlPolicy.watch(url) && UrlPolicy.browsableHttps(url))
+                    handler.post(() -> leaveWatch(layer, url));
             }
-            @Override public void onCanGoBack(GeckoSession source, boolean available) { canGoBack = available; }
+            @Override public void onCanGoBack(GeckoSession source, boolean available) { layer.canGoBack = available; }
             @Override public GeckoResult<String> onLoadError(GeckoSession source, String uri, WebRequestError error) {
-                loadFailed = true;
-                resetContentControls();
-                showFullscreen(false);
-                showError(R.string.load_error);
+                layer.loadFailed = true;
+                if (layer == front()) {
+                    resetContentControls();
+                    showFullscreen(false);
+                    showError(R.string.load_error);
+                }
                 return null; // Retain Gecko's normal error page and certificate protections.
             }
         });
         session.setProgressDelegate(new GeckoSession.ProgressDelegate() {
             @Override public void onPageStart(GeckoSession source, String url) {
-                loadFailed = false;
-                scrollKnown = false;
+                layer.loadFailed = false;
+                layer.scrollKnown = false;
+                if (layer.port != null) { layer.port.disconnect(); layer.port = null; }
+                if (layer != front()) return;
                 cancelPull();
                 reloadButton.setVisibility(View.GONE);
                 resetContentControls();
                 showFullscreen(false);
-                if (port != null) { port.disconnect(); port = null; }
                 status.setVisibility(View.GONE);
             }
             @Override public void onPageStop(GeckoSession source, boolean success) {
+                layer.loadFailed = !success;
+                if (layer != front()) return;
                 refreshIndicator.finish();
-                loadFailed = !success;
                 if (success) {
                     status.setVisibility(View.GONE);
                     reloadButton.setVisibility(View.GONE);
@@ -570,70 +704,372 @@ public final class MainActivity extends Activity {
                 else showError(R.string.load_error);
             }
             @Override public void onSessionStateChange(GeckoSession source, GeckoSession.SessionState state) {
-                sessionState = state;
+                layer.sessionState = state;
             }
         });
         session.setContentDelegate(new GeckoSession.ContentDelegate() {
-            @Override public void onFullScreen(GeckoSession source, boolean active) { showFullscreen(active); }
-            @Override public void onCrash(GeckoSession source) {
-                recoverSession(source);
+            @Override public void onFullScreen(GeckoSession source, boolean active) {
+                if (layer == front()) showFullscreen(active);
+                else if (active) source.exitFullScreen();
             }
-            @Override public void onKill(GeckoSession source) { recoverSession(source); }
+            @Override public void onCrash(GeckoSession source) {
+                recoverSession(layer);
+            }
+            @Override public void onKill(GeckoSession source) { recoverSession(layer); }
         });
         session.setPermissionDelegate(new GeckoSession.PermissionDelegate() {
             @Override public GeckoResult<Integer> onContentPermissionRequest(
                     GeckoSession source, ContentPermission permission) {
-                return GeckoResult.fromValue(ContentPermission.VALUE_DENY);
+                // Each video loads in a fresh, untapped document, so YouTube and the mini player's play need autoplay.
+                boolean autoplay = permission.permission == PERMISSION_AUTOPLAY_AUDIBLE
+                    || permission.permission == PERMISSION_AUTOPLAY_INAUDIBLE;
+                return GeckoResult.fromValue(autoplay && UrlPolicy.trusted(permission.uri)
+                    ? ContentPermission.VALUE_ALLOW : ContentPermission.VALUE_DENY);
             }
         }); // Camera/microphone/Android permissions also reject by default.
     }
 
-    private void recoverSession(GeckoSession source) {
-        port = null;
-        resetContentControls();
-        loadFailed = true;
-        showFullscreen(false);
-        showError(R.string.browser_crashed);
-        source.open(runtime);
-        source.setActive(!paused);
+    private void recoverSession(Layer layer) {
+        layer.port = null;
+        layer.loadFailed = true;
+        // A crashed player is simply closed; the browse page underneath recovers below.
+        if (layer.isWatch) {
+            handler.post(() -> { if (watch == layer) closeWatch(); });
+            return;
+        }
+        if (layer == front()) {
+            resetContentControls();
+            showFullscreen(false);
+            showError(R.string.browser_crashed);
+        }
+        layer.session.open(runtime);
+        layer.session.setActive(!paused && shown(layer));
         // Reload loads currentUrl explicitly because a reopened session has no history.
     }
 
-    private void navigate(String url) {
+    private void navigate(Layer layer, String url) {
         if (!UrlPolicy.browsableHttps(url)) {
             showError(R.string.https_required);
-        } else if (extensionReady) session.loadUri(url);
+        } else if (extensionReady) layer.session.loadUri(url);
     }
 
-    private void applyState() {
-        if (port == null) return;
+    /** Videos open in the player layer; any other page opens underneath it and the player shrinks. */
+    private void openUrl(String url) {
+        if (!UrlPolicy.browsableHttps(url)) {
+            showError(R.string.https_required);
+            return;
+        }
+        if (!extensionReady) return;
+        if (UrlPolicy.watch(url)) openWatch(url, null, false);
+        else {
+            setMini(true);
+            browse.session.loadUri(url);
+        }
+    }
+
+    // A new video replaces the one in the player rather than stacking another layer.
+    private void openWatch(String url, GeckoSession.SessionState state, boolean startMini) {
+        if (watch == null) watch = new Layer(true, watchView);
+        if (state != null) watch.session.restoreState(state);
+        else watch.session.loadUri(url);
+        watch.autoplay = state == null && !startMini;
+        showWatch(startMini);
+    }
+
+    private void moveToWatch(String url) {
+        if (isDestroyed() || !url.equals(browse.currentUrl)) return;
+        openWatch(url, null, false);
+        if (browse.canGoBack) browse.session.goBack();
+        else browse.session.loadUri(HOME);
+    }
+
+    private void leaveWatch(Layer layer, String url) {
+        if (isDestroyed() || layer != watch || !url.equals(layer.currentUrl)) return;
+        closeWatch();
+        browse.session.loadUri(url);
+    }
+
+    private void setMini(boolean value) {
+        if (watch != null && mini != value) showWatch(value);
+    }
+
+    private void showWatch(boolean value) {
+        if (value && fullscreen) {
+            watch.session.exitFullScreen();
+            showFullscreen(false);
+        }
+        mini = value;
+        layoutWatch();
+        sendLayer(watch);
+        frontChanged();
+    }
+
+    private void closeWatch() {
+        if (watch == null) return;
+        if (fullscreen) showFullscreen(false);
+        Layer layer = watch;
+        watch = null;
+        mini = false;
+        handler.removeCallbacks(layer.suspend);
+        if (layer.port != null) { layer.port.disconnect(); layer.port = null; }
+        watchView.releaseSession();
+        layer.session.close();
+        layoutWatch();
+        frontChanged();
+    }
+
+    private void frontChanged() {
+        cancelPull();
+        refreshIndicator.hide();
+        resetContentControls();
+        for (Layer layer : layers()) layer.session.setActive(!paused && shown(layer));
+        Layer layer = front();
+        if (layer.loadFailed) showError(R.string.load_error);
+        else {
+            status.setVisibility(View.GONE);
+            reloadButton.setVisibility(View.GONE);
+        }
+        applyState(layer); // A new revision makes the page report now rather than on its next heartbeat.
+    }
+
+    private void layoutWatch() {
+        boolean open = watch != null;
+        boolean small = open && mini;
+        watchFrame.setVisibility(open ? View.VISIBLE : View.GONE);
+        miniOverlay.setVisibility(small ? View.VISIBLE : View.GONE);
+        miniClose.setVisibility(small ? View.VISIBLE : View.GONE);
+        miniPlay.setVisibility(small ? View.VISIBLE : View.GONE);
+        updateMiniPlay();
+        // Screen readers skip whichever page is covered or shrunk to a single tap target.
+        web.setImportantForAccessibility(open && !small
+            ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+        watchView.setImportantForAccessibility(small
+            ? View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS : View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
+        FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(-1, -1);
+        FrameLayout.LayoutParams page = new FrameLayout.LayoutParams(-1, -1);
+        float scale = 1;
+        if (small) {
+            // Half the screen's short side keeps one size through rotation.
+            int width = Math.min(getResources().getDisplayMetrics().widthPixels,
+                getResources().getDisplayMetrics().heightPixels) / 2;
+            params = new FrameLayout.LayoutParams(width, width * 9 / 16, Gravity.TOP | Gravity.START);
+            // YouTube pauses a player it sees shrink ("tiny mode"), so the page keeps the full player size and is
+            // only drawn scaled down; the page pins its player to the top strip this frame shows.
+            int pageWidth = stage.getWidth() > 0 ? stage.getWidth() : getResources().getDisplayMetrics().widthPixels;
+            int pageHeight = stage.getHeight() > 0 ? stage.getHeight() : getResources().getDisplayMetrics().heightPixels;
+            page = new FrameLayout.LayoutParams(pageWidth, pageHeight, Gravity.TOP | Gravity.START);
+            scale = width / (float) pageWidth;
+        }
+        watchFrame.setLayoutParams(params);
+        watchView.setLayoutParams(page);
+        watchView.setPivotX(0);
+        watchView.setPivotY(0);
+        watchView.setScaleX(scale);
+        watchView.setScaleY(scale);
+        watchBackground.setCornerRadius(small ? dp(8) : 0);
+        watchFrame.setElevation(small ? dp(8) : 0);
+        placeMini(false);
+    }
+
+    private Drawable miniButtonBackground() {
+        GradientDrawable dot = new GradientDrawable();
+        dot.setShape(GradientDrawable.OVAL);
+        dot.setColor(0xB3000000);
+        return new RippleDrawable(ColorStateList.valueOf(0x33FFFFFF), dot, null);
+    }
+
+    private float miniLeft() { return dp(MINI_MARGIN_DP); }
+
+    private float miniTop() { return dp(MINI_MARGIN_DP); }
+
+    private float miniRight() {
+        return Math.max(miniLeft(), stage.getWidth() - watchFrame.getLayoutParams().width - dp(MINI_MARGIN_DP));
+    }
+
+    // The bottom corners keep clear of YouTube's bottom navigation bar.
+    private float miniBottom() {
+        return Math.max(miniTop(), stage.getHeight() - watchFrame.getLayoutParams().height - dp(MINI_BOTTOM_MARGIN_DP));
+    }
+
+    private void placeMini(boolean animate) {
+        boolean small = watch != null && mini;
+        float x = !small ? 0 : (miniCorner & 1) != 0 ? miniRight() : miniLeft();
+        float y = !small ? 0 : (miniCorner & 2) != 0 ? miniBottom() : miniTop();
+        watchFrame.animate().cancel();
+        if (animate) watchFrame.animate().translationX(x).translationY(y).alpha(1).setDuration(200);
+        else {
+            watchFrame.setTranslationX(x);
+            watchFrame.setTranslationY(y);
+            watchFrame.setAlpha(1);
+        }
+    }
+
+    /** How far the mini player has been dragged past the left or right edge of its travel. */
+    private float miniOvershoot(float x) { return Math.max(0, Math.max(miniLeft() - x, x - miniRight())); }
+
+    /** A drag moves the mini player, which then settles in the nearest corner; a tap expands it. */
+    private boolean dragMini(View view, MotionEvent event) {
+        switch (event.getActionMasked()) {
+            case MotionEvent.ACTION_DOWN:
+                watchFrame.animate().cancel();
+                draggingMini = false;
+                if (miniVelocity != null) miniVelocity.recycle();
+                miniVelocity = VelocityTracker.obtain();
+                trackMini(event);
+                miniRawX = event.getRawX();
+                miniRawY = event.getRawY();
+                miniStartX = watchFrame.getTranslationX();
+                miniStartY = watchFrame.getTranslationY();
+                return true;
+            case MotionEvent.ACTION_MOVE:
+                trackMini(event);
+                float dx = event.getRawX() - miniRawX;
+                float dy = event.getRawY() - miniRawY;
+                if (!draggingMini && Math.hypot(dx, dy) > ViewConfiguration.get(this).getScaledTouchSlop()) draggingMini = true;
+                if (draggingMini) {
+                    // Sideways it may leave the screen, fading as it goes, to be dismissed.
+                    float width = watchFrame.getWidth();
+                    float x = Math.min(miniRight() + width, Math.max(miniLeft() - width, miniStartX + dx));
+                    watchFrame.setTranslationX(x);
+                    watchFrame.setTranslationY(Math.min(miniBottom(), Math.max(miniTop(), miniStartY + dy)));
+                    watchFrame.setAlpha(1 - 0.7f * Math.min(1, miniOvershoot(x) / Math.max(1, width)));
+                }
+                return true;
+            case MotionEvent.ACTION_UP:
+                if (!draggingMini) {
+                    view.performClick();
+                    return true;
+                }
+                draggingMini = false;
+                float vx = 0;
+                float vy = 0;
+                if (miniVelocity != null) {
+                    trackMini(event);
+                    miniVelocity.computeCurrentVelocity(1000);
+                    vx = miniVelocity.getXVelocity();
+                    vy = miniVelocity.getYVelocity();
+                    miniVelocity.recycle();
+                    miniVelocity = null;
+                }
+                float flick = dp(MINI_FLICK_DP_PER_S);
+                if (-vy > flick && -vy > Math.abs(vx)) {
+                    expandMini();
+                    return true;
+                }
+                float x = watchFrame.getTranslationX();
+                float y = watchFrame.getTranslationY();
+                boolean onRight = x - miniLeft() > miniRight() - x;
+                // A sideways flick toward the edge it already sits on, or a drag mostly off it, dismisses it.
+                boolean outward = Math.abs(vx) > flick && Math.abs(vx) > Math.abs(vy) && vx > 0 == onRight;
+                if (outward || miniOvershoot(x) > watchFrame.getWidth() * 0.4f) {
+                    dismissMini(onRight);
+                    return true;
+                }
+                // A flick picks the corner it points to; a slow release settles in the nearest one.
+                boolean right = Math.abs(vx) > flick ? vx > 0 : x - miniLeft() > miniRight() - x;
+                boolean bottom = vy > flick || (Math.abs(vy) <= flick && y - miniTop() > miniBottom() - y);
+                miniCorner = (right ? 1 : 0) | (bottom ? 2 : 0);
+                getPreferences(MODE_PRIVATE).edit().putInt("miniCorner", miniCorner).apply();
+                placeMini(true);
+                return true;
+            case MotionEvent.ACTION_CANCEL:
+                draggingMini = false;
+                if (miniVelocity != null) { miniVelocity.recycle(); miniVelocity = null; }
+                placeMini(true);
+                return true;
+            default: return true;
+        }
+    }
+
+    // Screen coordinates: the overlay moves with the finger, so its own coordinates barely change.
+    private void trackMini(MotionEvent event) {
+        if (miniVelocity == null) return;
+        MotionEvent screen = MotionEvent.obtain(event);
+        screen.setLocation(event.getRawX(), event.getRawY());
+        miniVelocity.addMovement(screen);
+        screen.recycle();
+    }
+
+    // The mini player slides to the top before it fills the screen, so the expansion reads as one upward motion.
+    private void expandMini() {
+        watchFrame.animate().cancel();
+        watchFrame.animate().translationY(0).setDuration(150).withEndAction(() -> setMini(false));
+    }
+
+    private void dismissMini(boolean toRight) {
+        watchFrame.animate().cancel();
+        float x = toRight ? stage.getWidth() : -watchFrame.getWidth();
+        watchFrame.animate().translationX(x).alpha(0).setDuration(180).withEndAction(this::closeWatch);
+    }
+
+    private void updateMiniPlay() {
+        boolean playing = watch != null && watch.playing;
+        miniPlay.setImageResource(playing ? R.drawable.ic_pause : R.drawable.ic_play);
+        miniPlay.setContentDescription(getString(playing ? R.string.pause_video : R.string.play_video));
+    }
+
+    private void togglePlayback() {
+        if (watch == null || !mini || watch.port == null || paused) return;
         try {
-            port.postMessage(new JSONObject().put("type", "state").put("enabled", true)
-                .put("paused", paused).put("revision", ++revision));
+            watch.port.postMessage(new JSONObject().put("type", "playback").put("play", !watch.playing)
+                .put("revision", watch.revision));
+        } catch (JSONException error) {
+            throw new IllegalStateException(error);
+        }
+        watch.playing = !watch.playing; // The page's next status confirms or corrects this.
+        updateMiniPlay();
+    }
+
+    private void sendLayer(Layer layer) {
+        if (layer == null || layer.port == null) return;
+        try {
+            layer.port.postMessage(new JSONObject().put("type", "layer").put("watch", layer.isWatch)
+                .put("mini", layer.isWatch && mini).put("autoplay", layer.autoplay));
         } catch (JSONException error) {
             throw new IllegalStateException(error);
         }
     }
 
-    private void receiveMessage(Object message, WebExtension.Port source) {
-        if (source != port || !(message instanceof JSONObject) || isDestroyed()) return;
+    private void applyState() { for (Layer layer : layers()) applyState(layer); }
+
+    private void applyState(Layer layer) {
+        if (layer.port == null) return;
+        try {
+            layer.port.postMessage(new JSONObject().put("type", "state").put("enabled", true)
+                .put("paused", paused).put("revision", ++layer.revision));
+        } catch (JSONException error) {
+            throw new IllegalStateException(error);
+        }
+    }
+
+    private void receiveMessage(Object message, Layer layer, WebExtension.Port source) {
+        if (source != layer.port || !(message instanceof JSONObject) || isDestroyed()) return;
         JSONObject state = (JSONObject) message;
-        if (!NativeProtocol.integer(state.opt("revision"), revision)) return;
+        if (!NativeProtocol.integer(state.opt("revision"), layer.revision)) return;
         Object type = state.opt("type");
+        boolean front = layer == front();
+        if ("open-watch".equals(type) || "open-browse".equals(type)) {
+            Object target = state.opt("target");
+            // Browse pages may only open videos; the player may only send other pages down to browse.
+            if (front && !paused && layer.isWatch == "open-browse".equals(type) && currentDocument(layer, state)
+                && target instanceof String && UrlPolicy.browsableHttps((String) target)
+                && layer.isWatch != UrlPolicy.watch((String) target)) openUrl((String) target);
+            return;
+        }
         if ("open-speed-selector".equals(type)) {
-            if (!paused && !loadFailed && !fullscreen && currentDocument(state)
+            if (front && !paused && !layer.loadFailed && !fullscreen && currentDocument(layer, state)
                 && contentSpeedAvailable && videoContextEquals(state.opt("videoContext")) && speedSelector == null) chooseSpeed();
             return;
         }
         if ("chip-position".equals(type)) {
-            if (!paused && !loadFailed && currentDocument(state)
+            if (front && !paused && !layer.loadFailed && currentDocument(layer, state)
                 && NativeProtocol.fraction(state.opt("x")) && NativeProtocol.fraction(state.opt("y"))) {
                 saveChipPosition(((Number) state.opt("x")).floatValue(), ((Number) state.opt("y")).floatValue());
             }
             return;
         }
         if ("speed-result".equals(type)) {
-            if (paused || !NativeProtocol.integer(state.opt("commandId"), pendingCommand)
+            if (!front || paused || !NativeProtocol.integer(state.opt("commandId"), pendingCommand)
                 || pendingCommand == 0 || !(state.opt("accepted") instanceof Boolean)
                 || !videoContextEquals(state.opt("videoContext"))) return;
             pendingCommand = 0;
@@ -650,14 +1086,19 @@ public final class MainActivity extends Activity {
             || !(state.isNull("videoContext") || NativeProtocol.context(state.opt("videoContext")))
             || !(state.isNull("contentError") || "rate-rejected".equals(state.opt("contentError")))
             || !(state.isNull("controlsVisible") || state.opt("controlsVisible") instanceof Boolean)) return;
+        if (layer.isWatch && currentDocument(layer, state) && state.opt("playing") instanceof Boolean) {
+            layer.playing = (Boolean) state.opt("playing");
+            if (layer.playing) layer.autoplay = false;
+            updateMiniPlay();
+        }
         if (paused) {
             if (Boolean.TRUE.equals(state.opt("paused"))) {
-                handler.removeCallbacks(suspendSession);
-                suspendSession.run();
+                handler.removeCallbacks(layer.suspend);
+                layer.suspend.run();
             }
             return;
         }
-        if (!currentDocument(state) || loadFailed || !Boolean.FALSE.equals(state.opt("paused"))
+        if (!front || !currentDocument(layer, state) || layer.loadFailed || !Boolean.FALSE.equals(state.opt("paused"))
             || !Boolean.TRUE.equals(state.opt("enabled"))) return;
         String context = state.isNull("videoContext") ? null : (String) state.opt("videoContext");
         if (videoContext != null && !videoContext.equals(context) && speedSelector != null) speedSelector.dismiss();
@@ -677,8 +1118,8 @@ public final class MainActivity extends Activity {
         return state.has(key) && NativeProtocol.optionalRate(state.isNull(key) ? null : state.opt(key));
     }
 
-    private boolean currentDocument(JSONObject state) {
-        return UrlPolicy.trusted(currentUrl) && currentUrl.equals(state.opt("url"));
+    private boolean currentDocument(Layer layer, JSONObject state) {
+        return UrlPolicy.trusted(layer.currentUrl) && layer.currentUrl.equals(state.opt("url"));
     }
 
     private boolean videoContextEquals(Object value) {
@@ -749,9 +1190,10 @@ public final class MainActivity extends Activity {
     }
 
     private void chooseSpeed() {
-        if (port == null || videoContext == null || paused || !contentSpeedAvailable) return;
+        Layer layer = front();
+        if (layer.port == null || videoContext == null || paused || !contentSpeedAvailable) return;
         String context = videoContext;
-        WebExtension.Port connection = port;
+        WebExtension.Port connection = layer.port;
         boolean moved = chipX >= 0;
         Dialog sheet = new Dialog(this, android.R.style.Theme_Material_Dialog_NoActionBar);
         Context themed = sheet.getContext();
@@ -769,7 +1211,7 @@ public final class MainActivity extends Activity {
         body.addView(handle, handleParams);
         // Each slider release, step or mark applies at once; Done only closes the selector.
         body.addView(new SpeedSlider(themed, contentRate, moved ? null : getString(R.string.speed_chip_hint), rate -> {
-                if (connection != port || !videoContextEquals(context) || paused) {
+                if (layer != front() || connection != layer.port || !videoContextEquals(context) || paused) {
                     if (speedSelector != null) speedSelector.dismiss();
                     showSpeedError();
                     return;
@@ -777,7 +1219,7 @@ public final class MainActivity extends Activity {
                 try {
                     int id = ++commandId;
                     pendingCommand = id;
-                    connection.postMessage(new JSONObject().put("type", "content-speed").put("revision", revision)
+                    connection.postMessage(new JSONObject().put("type", "content-speed").put("revision", layer.revision)
                         .put("videoContext", context).put("commandId", id).put("rate", rate));
                     handler.postDelayed(() -> {
                         if (pendingCommand == id) { pendingCommand = 0; showSpeedError(); }
@@ -886,8 +1328,12 @@ public final class MainActivity extends Activity {
     @Override protected void onResume() {
         super.onResume();
         paused = false;
-        handler.removeCallbacks(suspendSession);
-        if (session != null) { session.setActive(true); applyState(); }
+        if (browse == null) return;
+        for (Layer layer : layers()) {
+            handler.removeCallbacks(layer.suspend);
+            layer.session.setActive(shown(layer));
+        }
+        applyState();
     }
 
     @Override public void onConfigurationChanged(Configuration config) {
@@ -905,22 +1351,33 @@ public final class MainActivity extends Activity {
         updateSpeedControls(false);
         applyState();
         // Restore speed and pause media before suspension; bound the wait if content hangs.
-        if (port == null) suspendSession.run();
-        else handler.postDelayed(suspendSession, 250);
+        for (Layer layer : layers()) {
+            if (layer.port == null) layer.suspend.run();
+            else handler.postDelayed(layer.suspend, 250);
+        }
         super.onPause();
     }
 
-    private File sessionStateFile() { return new File(getFilesDir(), SessionStateStore.FILE_NAME); }
+    private File stateFile(String name) { return new File(getFilesDir(), name); }
 
     @Override protected void onSaveInstanceState(Bundle state) {
         super.onSaveInstanceState(state);
-        if (sessionState == null) return;
+        if (browse == null) return;
+        saveLayer(state, browse, "browserStateSaved", SessionStateStore.FILE_NAME);
+        if (watch != null && saveLayer(state, watch, "watchStateSaved", SessionStateStore.WATCH_FILE_NAME))
+            state.putBoolean("watchMini", mini);
+    }
+
+    private boolean saveLayer(Bundle state, Layer layer, String key, String name) {
+        if (layer.sessionState == null) return false;
         try {
-            SessionStateStore.save(sessionStateFile(), sessionState.toString());
-            state.putBoolean("browserStateSaved", true);
+            SessionStateStore.save(stateFile(name), layer.sessionState.toString());
+            state.putBoolean(key, true);
+            return true;
         } catch (IOException error) {
             // Losing history on recreation is better than crashing on an oversized Bundle.
-            SessionStateStore.clear(sessionStateFile());
+            SessionStateStore.clear(stateFile(name));
+            return false;
         }
     }
 
@@ -930,8 +1387,10 @@ public final class MainActivity extends Activity {
     @Override public void onBackPressed() { handleBack(); }
 
     private void handleBack() {
-        if (fullscreen) { session.exitFullScreen(); showFullscreen(false); }
-        else if (canGoBack) session.goBack();
+        if (fullscreen) { front().session.exitFullScreen(); showFullscreen(false); }
+        else if (watch != null && !mini) setMini(true);
+        else if (browse.canGoBack) browse.session.goBack();
+        else if (watch != null) closeWatch();
         else finish();
     }
 
@@ -939,9 +1398,13 @@ public final class MainActivity extends Activity {
         showFullscreen(false);
         if (speedSelector != null) speedSelector.dismiss();
         handler.removeCallbacksAndMessages(null);
-        if (port != null) { port.disconnect(); port = null; }
-        if (web != null) web.releaseSession();
-        if (session != null) session.close();
+        if (browse != null) {
+            for (Layer layer : layers()) {
+                if (layer.port != null) { layer.port.disconnect(); layer.port = null; }
+                layer.view.releaseSession();
+                layer.session.close();
+            }
+        }
         super.onDestroy();
     }
 
