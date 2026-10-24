@@ -38,7 +38,7 @@ is always on; routine status banners remain hidden.
 Fullscreen overrides portrait lock and restores the previous orientation policy
 on exit. Normal and fullscreen chips open the same selector: a 0.25×–4× slider
 with whole-speed marks and tick lines every 0.25×, an exact readout, and ±0.05× steps. Each release or step
-applies at once; Done closes it. Each new normal video starts at 1× once; the current selection survives ads, rotation, and
+applies at once; Done closes it. Each new normal video starts once at the last speed chosen for a normal video (1× until one is chosen), kept across restarts; the current selection survives ads, rotation, and
 background/resume. Selecting during an ad changes the rate restored afterward.
 YouTube menu selections also become the remembered speed. Native hold-to-2×
 temporarily yields to YouTube and restores the remembered selection after release.

@@ -373,3 +373,13 @@ test('a tapped video autoplays once in a fresh player page; a page that already 
   old.send({ type: 'layer', watch: true, mini: false, autoplay: true });
   assert.deepEqual(oldCalls, []);
 });
+
+test('default speed messages pass a numeric rate to the controller', () => {
+  const current = host();
+  const rates = [];
+  current.context.YouTubeAdAccelerator.setDefaultRate = rate => rates.push(rate);
+  current.send({type:'default-speed', rate:1.5});
+  current.send({type:'default-speed', rate:'2'});
+  current.send({type:'default-speed'});
+  assert.deepEqual(rates, [1.5]);
+});

@@ -12,6 +12,10 @@ final class NativeProtocol {
         double clamped = Math.min(MAX_RATE, Math.max(MIN_RATE, rate));
         return Math.round(clamped / RATE_STEP) / (double) Math.round(1 / RATE_STEP);
     }
+    /** A rate the selector itself offers: 0.25× through 4× in 0.05× steps. */
+    static boolean selectableRate(double rate) {
+        return rate >= MIN_RATE && rate <= MAX_RATE && Math.abs(rate / RATE_STEP - Math.round(rate / RATE_STEP)) < 1e-6;
+    }
     static boolean integer(Object value, int expected) {
         return value instanceof Number && ((Number) value).doubleValue() == expected;
     }

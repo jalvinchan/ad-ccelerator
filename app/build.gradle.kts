@@ -13,8 +13,8 @@ android {
         applicationId = "lab.youtube.accelerator"
         minSdk = 26
         targetSdk = 36
-        versionCode = 20
-        versionName = "0.6.3"
+        versionCode = 21
+        versionName = "0.6.4"
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

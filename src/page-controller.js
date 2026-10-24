@@ -16,6 +16,10 @@
   let videoKey = null;
   let generation = 0;
   let contentRate = 1;
+  // Each new normal video starts at the last chosen speed, which the host supplies.
+  let defaultRate = 1;
+  // True until the current video's speed is applied, chosen or adopted, so a late default can still replace it.
+  let fresh = true;
   let contentError = null;
   let failedVideo = null;
   let needsContent = true;
@@ -98,7 +102,8 @@
     end("video-changed");
     videoKey = key;
     generation++;
-    contentRate = 1;
+    contentRate = defaultRate;
+    fresh = true;
     contentError = null;
     failedVideo = null;
     needsContent = true;
@@ -154,6 +159,7 @@
       if (wasAd || (needsContent && normalVideo())) applyContent(selected.video);
       else if (needsContent && validRate(selected.video.playbackRate)) contentRate = selected.video.playbackRate;
       needsContent = false;
+      fresh = false;
       wasAd = false;
       return;
     }
@@ -202,6 +208,7 @@
     if (gesture && !gesture.moved && rate === 2) gesture.hold = true;
     if (!holding() && validRate(rate)) {
       contentRate = rate;
+      fresh = false;
       contentError = null;
       failedVideo = null;
     }
@@ -261,6 +268,11 @@
   globalThis.YouTubeAdAccelerator = {
     setEnabled(value) { enabled = value === true; reconcile(); },
     setSuspended(value) { appSuspended = value === true; reconcile(); },
+    setDefaultRate(rate) {
+      if (!selectableRate(rate)) return;
+      defaultRate = Math.round(rate * 20) / 20;
+      if (fresh) contentRate = defaultRate;
+    },
     setContentRate(rate, expectedContext) {
       reconcile(); // Reject commands that raced URL navigation or a hidden/removed player.
       if (!selectableRate(rate)) return { accepted: false, error: "invalid-rate" };
@@ -271,6 +283,7 @@
       if (!temporary) invalidateGesture();
       const previous = contentRate;
       contentRate = rate;
+      fresh = false;
       contentError = null;
       failedVideo = null;
       const ad = selected.player.classList.contains("ad-showing");

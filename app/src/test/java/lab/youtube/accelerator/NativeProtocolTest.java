@@ -21,6 +21,8 @@ public class NativeProtocolTest {
         assertEquals(0.3, NativeProtocol.snapRate(0.3000000000000001), 0);
         assertEquals(0.25, NativeProtocol.snapRate(0), 0);
         assertEquals(4, NativeProtocol.snapRate(9), 0);
+        for (double rate : new double[] {0.25, 1, 1.05, 2.25, 4}) assertTrue(NativeProtocol.selectableRate(rate));
+        for (double rate : new double[] {0.2, 1.01, 4.05, 8, Double.NaN}) assertFalse(NativeProtocol.selectableRate(rate));
         for (Object value : new Object[] {0, 0.5, 1L}) assertTrue(NativeProtocol.fraction(value));
         for (Object value : new Object[] {"0.5", true, null, -0.1, 1.1, Double.NaN})
             assertFalse(NativeProtocol.fraction(value));

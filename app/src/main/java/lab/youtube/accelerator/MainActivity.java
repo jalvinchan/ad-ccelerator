@@ -115,6 +115,8 @@ public final class MainActivity extends Activity {
     private boolean seekAvailable;
     private String videoContext;
     private double contentRate = 1;
+    /** The last speed chosen for a normal video; each new one starts at it. */
+    private double defaultSpeed = 1;
     private boolean contentSpeedAvailable = false;
     private int commandId;
     private int pendingCommand;
@@ -195,6 +197,7 @@ public final class MainActivity extends Activity {
         miniCorner = getPreferences(MODE_PRIVATE).getInt("miniCorner", 3) & 3;
         int savedSeek = getPreferences(MODE_PRIVATE).getInt("seekInterval", 10);
         seekInterval = NativeProtocol.seekInterval(savedSeek) ? savedSeek : 10;
+        defaultSpeed = NativeProtocol.snapRate(getPreferences(MODE_PRIVATE).getFloat("defaultSpeed", 1));
         buildUi();
         // A file left by a crash or killed process must not resurface on a later cold start.
         if (savedState == null) {
@@ -264,6 +267,7 @@ public final class MainActivity extends Activity {
                     }
                 });
                 sendLayer(layer);
+                sendDefaultSpeed(layer); // Before the page resumes, so its first video starts at it.
                 applyState(layer);
                 sendChipPosition(layer);
                 sendSeekInterval(layer);
@@ -575,6 +579,23 @@ public final class MainActivity extends Activity {
         if (layer.port == null) return;
         try {
             layer.port.postMessage(new JSONObject().put("type", "seek-interval").put("seconds", seekInterval));
+        } catch (JSONException error) {
+            throw new IllegalStateException(error);
+        }
+    }
+
+    private void setDefaultSpeed(double rate) {
+        rate = NativeProtocol.snapRate(rate);
+        if (rate == defaultSpeed) return;
+        defaultSpeed = rate;
+        getPreferences(MODE_PRIVATE).edit().putFloat("defaultSpeed", (float) rate).apply();
+        for (Layer layer : layers()) sendDefaultSpeed(layer);
+    }
+
+    private void sendDefaultSpeed(Layer layer) {
+        if (layer.port == null) return;
+        try {
+            layer.port.postMessage(new JSONObject().put("type", "default-speed").put("rate", defaultSpeed));
         } catch (JSONException error) {
             throw new IllegalStateException(error);
         }
@@ -1111,6 +1132,9 @@ public final class MainActivity extends Activity {
         boolean rejected = !state.isNull("contentError") || (!state.isNull("contentAppliedRate")
             && ((Number) state.opt("contentAppliedRate")).doubleValue() != contentRate);
         updateSpeedControls(rejected);
+        // Selector and YouTube-menu choices both land here; Shorts are YouTube's and are not remembered.
+        if (contentSpeedAvailable && !rejected && videoContext != null && NativeProtocol.selectableRate(contentRate))
+            setDefaultSpeed(contentRate);
 
     }
 

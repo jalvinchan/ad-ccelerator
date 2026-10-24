@@ -510,3 +510,27 @@ test("sibling gesture recognition excludes native controls, unrelated overlays a
     assert.equal(current.status().contentAppliedRate, 2);
   }
 });
+
+test("each new normal video starts at the default speed, which never overrides the current video", async () => {
+  const current = await page({ rate: 1 });
+  const controller = current.sandbox.YouTubeAdAccelerator;
+  assert.equal(current.video.playbackRate, 1);
+  controller.setDefaultRate(1.5);
+  current.scan();
+  assert.equal(current.video.playbackRate, 1);
+  assert.equal(current.status().contentRate, 1);
+  current.sandbox.location.href = "https://m.youtube.com/watch?v=second";
+  current.scan();
+  assert.equal(current.video.playbackRate, 1.5);
+  assert.equal(current.status().contentRate, 1.5);
+  // A default that arrives before a suspended page first applies its video still wins.
+  controller.setSuspended(true);
+  current.sandbox.location.href = "https://m.youtube.com/watch?v=third";
+  current.scan();
+  for (const invalid of [5, 0.2, 1.01, "2", NaN]) controller.setDefaultRate(invalid);
+  controller.setDefaultRate(2.25);
+  controller.setSuspended(false);
+  current.scan();
+  assert.equal(current.video.playbackRate, 2.25);
+  assert.equal(current.status().contentRate, 2.25);
+});

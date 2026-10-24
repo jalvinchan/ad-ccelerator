@@ -156,6 +156,10 @@
         if ([5, 10, 15, 30].includes(message.seconds)) controls.setSeekInterval(message.seconds);
         return;
       }
+      if (message?.type === "default-speed") {
+        if (typeof message.rate === "number") controller.setDefaultRate?.(message.rate);
+        return;
+      }
       if (message?.type === "seek") {
         if (paused || document.hidden || message.revision !== revision
           || typeof message.videoContext !== "string" || message.videoContext.length > 200
